@@ -1,0 +1,8 @@
+# skills/manage-document-revisions/agents/openai.yaml
+interface:
+  display_name: "Document Revision Folders"
+  short_description: "Safely separate and compare document revisions"
+  default_prompt: "Use $manage-document-revisions to prepare, edit, and compare a new document revision run."
+
+policy:
+  allow_implicit_invocation: true

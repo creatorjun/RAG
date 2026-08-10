@@ -6,6 +6,8 @@
 | 자산 | 기밀성 | 무결성 | 가용성 |
 | --- | --- | --- | --- |
 | 사내 원본 문서 | 최고 | 최고 | 높음 |
+| `data/before` 입력 해시 | 높음 | 최고 | 높음 |
+| `data/after` 수정본과 비교 보고서 | ACL별 | 최고 | 높음 |
 | ACL과 보안 등급 | 최고 | 최고 | 높음 |
 | 검색 질의 원본 | 최고 | 높음 | 중간 |
 | 외부 전송 질의 | 높음 | 높음 | 중간 |
@@ -38,14 +40,14 @@ flowchart LR
         B["Track B Worker"]
     end
     subgraph U0["비신뢰 입력"]
-        DOC["사내 문서 내용"]
+        BEFORE["data/before 문서 내용"]
         WEB["웹 콘텐츠"]
     end
     subgraph E0["외부 영역"]
         SEARCH["검색 공급자"]
         SITE["공개 사이트"]
     end
-    DOC --> A
+    BEFORE --> A
     A --> C
     C --> B
     WEB --> C
@@ -55,6 +57,8 @@ flowchart LR
 ```
 
 사내 문서는 접근이 승인된 데이터이지만 내용은 신뢰하지 않는다. 문서 안의 명령, 링크, 매크로, 시스템 지시를 실행하지 않는다. 모델 워커도 신뢰 주체가 아니라 제한된 계산 어댑터로 취급한다.
+
+Confluence를 포함한 원본 시스템과 `data/before` 사이의 내보내기 경계는 시스템 외부다. 원본 시스템 자격정보는 신뢰 영역에도 들어오지 않으며, AI에는 로컬 파일 스냅샷만 제공한다.
 
 ## 4. 데이터 분류와 처리 정책
 
@@ -171,6 +175,8 @@ React 20 official migration guide
 
 모델은 텍스트 변환만 수행한다. 파일, DB, 셸, 네트워크, 비밀 저장소에 접근하지 않는다. 도구 호출 형식을 출력하더라도 실행하지 않는다.
 
+프로젝트 스킬 실행기는 모델과 분리된 정책 집행자다. 실행기는 `data/before` 읽기와 현재 `data/after` run 쓰기·비교만 수행하며, Qwen 출력의 경로를 그대로 사용하지 않고 정규화·allowlist 검사를 거친다.
+
 ### 7.2 입력 포장
 
 - 시스템 지시와 데이터 구간을 분리
@@ -199,13 +205,15 @@ React 20 official migration guide
 | service | account | 값 |
 | --- | --- | --- |
 | `enterprise-rag/tavily` | 환경명 | Tavily API key |
-| `enterprise-rag/confluence` | source ID | access token |
+
+Confluence secret 항목은 만들지 않는다. 원본 시스템 API 키, access token, cookie, base URL은 설정과 Keychain namespace 모두에서 금지한다.
 
 ### 8.2 규칙
 
-- 설정에는 `keychain://service/account` 참조만 저장
+- 웹 검색 설정에만 `keychain://service/account` 참조 저장
 - 비밀값 객체는 가능한 짧게 유지
 - 워커에 외부 API 비밀 전달 금지
+- 문서 리비전 스킬과 `data/before`·`data/after` 매니페스트에 비밀 전달 금지
 - 예외와 repr에서 비밀값 마스킹
 - dump, telemetry, prompt에 비밀 포함 금지
 - 회전 후 연결 테스트와 이전 key 폐기 감사 기록
@@ -223,14 +231,18 @@ React 20 official migration guide
 
 ## 10. 파일 시스템 보안
 
-- source roots는 read-only로 연다.
+- `data/before`는 OS 권한과 애플리케이션 정책 양쪽에서 read-only로 연다.
+- `data/after`는 현재 신규 run만 쓰고 다른 run과 finalized run은 read-only로 취급한다.
+- 기존 run 이름 충돌은 자동 suffix나 overwrite가 아니라 실패로 처리한다.
 - symlink와 junction은 기본 거부한다.
-- 저장 경로는 `var_root` 아래로 제한한다.
+- DB, CAS, 인덱스, 내부 staging은 `var_root` 아래로 제한하고 외부 전달 산출물은 승인된 current `after_root`에만 쓴다.
 - 임시 파일은 예측 불가능한 이름과 사용자 전용 권한을 사용한다.
 - CAS 쓰기는 임시 파일, fsync, atomic rename 순서다.
 - 업로드 파일명은 저장 경로 구성에 사용하지 않는다.
 - 파서가 외부 참조와 embedded object를 자동 열지 못하게 한다.
 - quarantine 객체는 일반 artifact 경로에서 노출하지 않는다.
+- before 입력과 after 문서의 상대 경로·크기·SHA-256을 비교 보고서에 기록한다.
+- finalization 전후 before 전체 해시를 재검사하고 차이가 있으면 게시를 차단한다.
 
 ## 11. 로그와 감사
 
@@ -260,9 +272,11 @@ React 20 official migration guide
 다음은 필수 감사 대상이다.
 
 - source 등록·변경·비활성
+- revision run 준비·비교·finalization과 경로 정책 차단
 - ACL snapshot 변경
 - 웹 egress 허용·차단·검토
 - 비밀 존재 검사와 회전
+- 금지된 Confluence 자격정보 설정 키 탐지
 - 승인 결정
 - artifact 게시·롤백
 - 모델·설정·정책 버전 승격
@@ -281,6 +295,9 @@ React 20 official migration guide
 | ACL 계산 실패 | 검색·합성 차단 | high |
 | 로그 비밀 탐지 | 로그 sink 중단·파일 격리 | critical |
 | 반복 인증 실패 | source 비활성 대신 circuit open | warning |
+| before 쓰기 가능 또는 해시 변경 | run 중단, 게시 차단 | critical |
+| 기존·finalized run 쓰기 시도 | 쓰기 차단 | high |
+| link·junction·경로 탈출 | 접근 차단 | high security event |
 
 보안 차단을 일반 transient 오류로 재시도하지 않는다.
 
@@ -316,3 +333,6 @@ React 20 official migration guide
 - 로그 fixture에서 비밀·원문 검출 0건
 - 모델·CAS hash 불일치 시 fail closed
 - 모든 승인·게시·egress 결정 감사 이벤트 존재
+- Confluence 자격정보 탐지 0건
+- `data/before` 실행 전후 해시 변화 0건
+- 기존·finalized run overwrite와 승인 경로 탈출 0건

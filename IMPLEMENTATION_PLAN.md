@@ -20,14 +20,41 @@ RAG/
 │   ├── development.yaml
 │   └── production.yaml
 ├── docs/
+│   ├── README.md
+│   ├── architecture.md
+│   ├── module-design.md
+│   ├── contracts.md
+│   ├── data-model.md
+│   ├── pipeline.md
+│   ├── configuration.md
 │   ├── operations.md
 │   ├── security.md
 │   ├── evaluation.md
+│   ├── implementation-roadmap.md
 │   └── adr/
 │       ├── 0001-clean-architecture.md
 │       ├── 0002-local-model-runtime.md
 │       ├── 0003-vector-store.md
-│       └── 0004-web-egress-policy.md
+│       ├── 0004-web-egress-policy.md
+│       └── 0005-folder-revision-boundary.md
+├── data/
+│   ├── before/
+│   │   └── <dataset>/
+│   └── after/
+│       └── runs/
+│           └── <run_id>/
+│               ├── documents/
+│               ├── _reports/
+│               └── run-manifest.json
+├── skills/
+│   └── manage-document-revisions/
+│       ├── SKILL.md
+│       ├── agents/openai.yaml
+│       ├── references/permission-model.md
+│       └── scripts/
+│           ├── prepare_run.py
+│           ├── compare_run.py
+│           └── test_document_workspace.py
 ├── scripts/
 │   ├── benchmark_hardware.py
 │   ├── download_models.py
@@ -62,6 +89,8 @@ RAG/
 │       │   ├── dto/
 │       │   ├── ports/
 │       │   │   ├── document_source.py
+│       │   │   ├── document_workspace.py
+│       │   │   ├── document_comparator.py
 │       │   │   ├── document_parser.py
 │       │   │   ├── chunker.py
 │       │   │   ├── embedder.py
@@ -75,6 +104,8 @@ RAG/
 │       │   ├── use_cases/
 │       │   │   ├── inventory_documents.py
 │       │   │   ├── ingest_document.py
+│       │   │   ├── prepare_revision_run.py
+│       │   │   ├── compare_revision_run.py
 │       │   │   ├── classify_chunks.py
 │       │   │   ├── deduplicate_chunks.py
 │       │   │   ├── extract_claims.py
@@ -88,8 +119,7 @@ RAG/
 │       ├── infrastructure/
 │       │   ├── __init__.py
 │       │   ├── sources/
-│       │   │   ├── filesystem_source.py
-│       │   │   └── confluence_source.py
+│       │   │   └── filesystem_source.py
 │       │   ├── parsing/
 │       │   │   ├── pdf_parser.py
 │       │   │   ├── docx_parser.py
@@ -111,6 +141,9 @@ RAG/
 │       │   ├── persistence/
 │       │   │   ├── sqlite_repository.py
 │       │   │   └── filesystem_artifact_repository.py
+│       │   ├── workspace/
+│       │   │   ├── folder_revision_workspace.py
+│       │   │   └── folder_tree_comparator.py
 │       │   ├── security/
 │       │   │   └── macos_keychain_store.py
 │       │   └── jobs/
@@ -128,7 +161,8 @@ RAG/
 │   ├── acceptance/
 │   └── fixtures/
 └── var/
-    ├── raw/
+    ├── database/
+    ├── objects/
     ├── normalized/
     ├── indexes/
     ├── artifacts/
@@ -137,7 +171,7 @@ RAG/
     └── logs/
 ```
 
-`var/`는 실행 데이터 전용이며 Git 추적에서 제외한다. 원본 문서는 `var/raw/`에서 읽기 전용으로 취급하고, 정규화 결과·인덱스·생성물은 서로 다른 디렉터리에 저장한다.
+`data/before/`는 데이터 관리자가 준비하는 불변 입력이고 `data/after/runs/<run_id>/`는 AI가 만드는 실행별 수정본이다. `var/`는 DB, CAS, 인덱스, 체크포인트 같은 재생성 가능한 내부 실행 데이터 전용이며 Git 추적에서 제외한다. 원본 시스템과의 동기화 및 최종 write-back은 이 런타임 밖의 승인된 절차로 수행한다.
 
 ## 2. 검토 결론과 핵심 보완 사항
 
@@ -151,6 +185,7 @@ RAG/
 | 키워드 기준 벡터 하나로 기술 문서 판별 | 임베딩은 분류기 자체가 아니며 단일 임계값은 오탐과 누락에 취약하다 | 규칙, 문서 메타데이터, 임베딩 중심점, 불확실성 구간을 결합한 3방향 라우팅을 사용한다 |
 | 유사도 0.90 이상 청크 삭제 | 임계값은 코퍼스별로 달라지고 최신 문서가 항상 권위 있는 문서는 아니다 | 정확 중복, 근사 텍스트 중복, 의미 중복을 단계화하고 원본 삭제 없이 정규본 포인터와 중복 군집을 저장한다 |
 | 웹 결과로 사내 문서를 직접 최신화 | 내부 고정 버전과 공개 최신 버전은 목적이 다르며 외부 검색은 정보 유출 위험이 있다 | 원문은 불변으로 보존하고 검증 근거, 차이, 제안 수정본을 별도 생성한 뒤 승인 절차를 거친다 |
+| AI에 Confluence API 키 제공 | 모델·스킬·문서 내용에 자격정보가 노출되고 원본 시스템 write-back 경계가 흐려진다 | Confluence 연동을 제거하고 외부에서 승인된 스냅샷을 `data/before`에 배치하며 AI는 현재 `data/after` run만 쓴다 |
 | K-means 후 한 번에 대량 합성 | 고정 K와 대형 단일 프롬프트는 주제 혼합, 근거 소실, 환각 위험이 있다 | 사내 분류체계 우선, 계층 군집 보조, 근거 인용을 강제한 계층형 Map-Reduce를 사용한다 |
 | 단일 거대 Markdown을 최종 산출물로 사용 | 변경 추적과 부분 재생성이 어렵다 | 주제별 문서와 인덱스를 정본으로 만들고 단일 Markdown은 선택적 내보내기로 제공한다 |
 
@@ -158,18 +193,19 @@ RAG/
 
 ### 3.1 목표
 
-1. PDF, DOCX, HTML, Markdown, Confluence 내보내기 문서를 증분 수집한다.
+1. 외부에서 승인되어 `data/before`에 배치된 PDF, DOCX, HTML, Markdown, 텍스트 문서를 증분 수집한다.
 2. 원본 위치, 문서 버전, 페이지와 섹션, ACL, 보안 등급을 모든 청크와 산출물까지 전파한다.
 3. 저비용 트랙에서 기술 관련성 판정, 검색 인덱싱, 중복 후보 생성을 수행한다.
 4. 고비용 트랙은 검증 가치가 높은 주장과 최종 합성에만 Qwen 3.6 27B를 사용한다.
 5. 모든 생성 문장을 내부 근거 또는 외부 근거에 연결하고 충돌과 불확실성을 노출한다.
 6. 중단 후 재개, 증분 재처리, 모델 교체가 가능한 재현성 있는 파이프라인을 구현한다.
 7. 기본 동작을 로컬 전용으로 유지하고 외부 통신은 정책과 승인을 통과한 검색 요청으로 제한한다.
+8. 수정 전 입력과 수정 후 실행을 폴더로 분리하고 파일별 해시·상태·diff를 자동 생성한다.
 
 ### 3.2 비목표
 
 1. 원본 사내 문서를 자동 수정하거나 삭제하지 않는다.
-2. 첫 버전에서 모든 사내 포맷과 모든 Confluence 권한 모델을 지원하지 않는다.
+2. Confluence API 연결, 자격정보 보관, 원본 시스템 자동 write-back을 구현하지 않는다.
 3. 모델이 판단한 최신 정보를 승인 없이 정본으로 게시하지 않는다.
 4. 262K 이상의 모델 최대 컨텍스트를 36GB 장비의 운영 목표로 삼지 않는다.
 5. 외부 웹 페이지의 지시문을 도구 호출이나 코드 실행으로 연결하지 않는다.
@@ -200,11 +236,22 @@ RAG/
 - 각 단계는 완료 결과를 원자적으로 커밋한 후 다음 작업을 큐에 넣는다.
 - 프로세스가 종료되어도 마지막 완료 단계부터 재개한다.
 
+### 4.4 폴더 리비전과 최소 권한
+
+- `data/before`는 읽기 전용이며 AI, Qwen 워커, 비교 도구가 수정·삭제·이동하지 않는다.
+- 수정 작업은 고유한 `data/after/runs/<run_id>/documents`에만 수행하고 기존 run을 덮어쓰지 않는다.
+- 준비 단계는 입력 파일의 상대 경로, 바이트 수, SHA-256을 매니페스트로 고정한다.
+- 비교 단계는 추가·수정·삭제·동일 상태, 전후 해시, UTF-8 텍스트 unified diff를 생성한다.
+- finalization 후 run은 불변으로 취급하며 후속 수정은 새 run으로 만든다.
+- 심볼릭 링크, junction, 특수 파일, 경로 탈출을 fail closed로 거부한다.
+- 스킬과 Qwen 워커는 Confluence, 비밀 저장소, 임의 네트워크, `data/before` 쓰기 권한을 갖지 않는다.
+
 ## 5. Two-Track 전체 데이터 흐름
 
 ```mermaid
 flowchart LR
-    A["사내 문서 원본"] --> B["인벤토리·ACL·해시"]
+    X["외부 승인 내보내기"] --> A["data/before 불변 스냅샷"]
+    A --> B["인벤토리·ACL·해시"]
     B --> C["파싱·정규화·구조 인식 청킹"]
     C --> D["정확 중복 제거"]
     D --> E["Track A: BGE-M3·규칙 기반 라우팅"]
@@ -220,7 +267,8 @@ flowchart LR
     M --> N
     N --> O["사람 승인"]
     O --> P["근거 기반 계층형 합성"]
-    P --> Q["주제별 위키·인덱스·선택적 단일 문서"]
+    P --> Q["data/after 신규 run·비교 보고서"]
+    Q --> R["사람 검토·별도 게시"]
 ```
 
 ### 5.1 Track A: 저비용 인제스천·검색 준비 트랙
@@ -229,7 +277,7 @@ Track A는 대량 처리량, 재실행 비용, 높은 재현성을 우선한다.
 
 처리 순서는 다음과 같다.
 
-1. 소스 인벤토리와 접근 권한 수집
+1. `data/before` 인벤토리와 sidecar 접근 등급 수집
 2. MIME과 확장자 검증, 악성 또는 암호화 파일 격리
 3. 콘텐츠 해시 기반 파일 단위 정확 중복 탐지
 4. 포맷별 파싱과 구조 보존 정규화
@@ -277,8 +325,10 @@ Track B는 정확성, 근거 보존, 감사 가능성을 우선한다. 한 번�
 
 ### 6.2 1단계: 인벤토리와 인제스천
 
-- 파일 시스템은 읽기 전용 루트 목록으로 제한한다.
-- Confluence는 API 원본을 바로 변환하지 않고 페이지 ID, 버전, 수정 시각, 작성자, 공간, ACL을 포함한 스냅샷으로 수집한다.
+- 입력 파일 시스템은 `data/before`의 해석된 절대 경로 하나로 제한하고 운영체제와 애플리케이션 양쪽에서 읽기 전용으로 취급한다.
+- Confluence를 포함한 원본 시스템 내보내기는 외부 책임이며 RAG 설정에는 base URL, API 키, access token, cookie를 두지 않는다.
+- 외부 내보내기는 가능한 경우 페이지 ID, 버전, 수정 시각, 작성자, 보안 등급의 비밀 제거 sidecar를 함께 배치한다. sidecar가 없으면 가장 제한적인 기본 ACL과 파일 기반 버전을 사용한다.
+- 모든 실행 전에 신규 `data/after/runs/<run_id>`를 준비하고 입력 해시 매니페스트를 생성한다.
 - 파일명만 신뢰하지 않고 MIME과 실제 포맷을 교차 확인한다.
 - 비밀번호가 걸린 파일, 손상 파일, 과대 파일, 미지원 파일은 실패시키지 않고 `quarantine`에 사유와 함께 기록한다.
 - PDF는 텍스트 레이어를 우선하고 텍스트 밀도가 낮은 페이지만 OCR 큐로 보낸다.
@@ -306,7 +356,7 @@ Track B는 정확성, 근거 보존, 감사 가능성을 우선한다. 한 번�
 
 단일 키워드 벡터 대신 다음 점수를 결합한다.
 
-1. 문서 경로, 공간, 작성 부서, 태그의 메타데이터 점수
+1. 데이터셋, 상대 경로, 작성 부서, 태그의 메타데이터 점수
 2. 코드, 명령, 버전 패턴, 기술 용어의 규칙 점수
 3. 최소 200개 수동 라벨 문서에서 계산한 기술·비기술 중심점과의 BGE-M3 유사도
 4. 제목과 본문의 문서 수준 집계 점수
@@ -388,11 +438,11 @@ Qwen은 문서 전체를 무차별적으로 읽지 않고 우선순위가 높은
 
 ### 6.9 8단계: 사람 승인과 게시 정책
 
-- 원문 수정 대신 `ValidationReport`와 `ProposedRevision`을 생성한다.
+- `data/before` 원문 수정 대신 현재 `data/after` run에 `ValidationReport`와 `ProposedRevision`을 생성한다.
 - 높은 영향도, 근거 충돌, 낮은 신뢰도, 보안 관련 변경은 반드시 사람 승인을 요구한다.
 - 승인자는 채택, 기각, 보류와 사유를 기록한다.
 - 승인되지 않은 제안은 최종 위키의 사실 서술에 혼합하지 않고 별도 검토 목록에 둔다.
-- 게시 산출물은 실행 ID, 승인 ID, 생성 시각, 사용 모델, 근거 목록을 포함한다.
+- 게시 후보는 실행 ID, 승인 ID, 생성 시각, 사용 모델, 입력 매니페스트, 전후 비교 보고서, 근거 목록을 포함한다.
 
 ### 6.10 9단계: 계층형 Map-Reduce 합성
 
@@ -407,7 +457,7 @@ Qwen은 문서 전체를 무차별적으로 읽지 않고 우선순위가 높은
 기본 산출물은 다음과 같다.
 
 ```text
-artifacts/
+data/after/runs/<run_id>/documents/
 ├── index.md
 ├── frontend/
 │   ├── index.md
@@ -424,7 +474,7 @@ artifacts/
 └── full_export.md
 ```
 
-`full_export.md`는 주제별 정본에서 생성하는 선택적 산출물이며 직접 편집하지 않는다.
+`full_export.md`는 주제별 정본에서 생성하는 선택적 산출물이며 직접 편집하지 않는다. 같은 run의 `_reports/`에는 입력 매니페스트, 전후 비교 JSON·Markdown, 파일별 diff를 저장한다.
 
 ## 7. 통합 메모리와 성능 운영 계획
 
@@ -463,6 +513,7 @@ Qwen 3.6 27B는 64개 층 중 16개가 전체 어텐션이며 4개 KV 헤드와 
 | `ApprovalDecision` | 대상 ID, 승인자, 결정, 사유, 시각 |
 | `SynthesisArtifact` | 주제, 본문, 근거 매니페스트, 모델·프롬프트 버전, 승인 상태 |
 | `PipelineRun` | 실행 ID, 설정 해시, 코드 버전, 단계 상태, 오류, 체크포인트 |
+| `DocumentRevisionRun` | run ID, before 매니페스트 해시, after 디렉터리, 상태, 비교 해시, finalization 시각 |
 
 모든 ID는 재실행 안정성을 위해 콘텐츠와 위치를 기반으로 결정적으로 생성하되, 문서가 이동해도 동일 원본임을 연결할 수 있는 별도 소스 식별자를 둔다.
 
@@ -480,7 +531,9 @@ Qwen 3.6 27B는 64개 층 중 16개가 전체 어텐션이며 4개 KV 헤드와 
 
 - 문서 ACL을 청크, 검색 결과, 답변, 합성 산출물까지 전파한다.
 - 서로 다른 권한 집합의 청크를 하나의 공개 산출물로 합성하지 않는다.
-- API 키는 macOS Keychain 어댑터로 읽고 `.env`에는 실제 비밀값을 저장하지 않는다.
+- Confluence 자격정보는 시스템에 입력하거나 저장하지 않는다.
+- 선택적 공개 웹 검색 API 키는 Coordinator만 macOS Keychain 어댑터로 읽고 스킬·모델 워커·문서 프롬프트에 전달하지 않는다.
+- `data/before`는 읽기 전용, 현재 `data/after` run은 쓰기 허용, 다른 run은 읽기 전용으로 분리한다.
 - 로그에는 원문 대신 실행 ID, 문서 ID, 단계, 크기, 시간, 상태를 기본 기록한다.
 - 디버그 원문 로깅은 운영 환경에서 금지한다.
 - 외부 다운로드 모델은 리비전과 파일 해시를 고정하고 라이선스를 기록한다.
@@ -500,6 +553,14 @@ runtime:
   python: "3.12"
   max_parallel_llm_jobs: 1
   checkpoint_enabled: true
+
+document_workspace:
+  before_root: "./data/before"
+  after_root: "./data/after"
+  preserve_relative_paths: true
+  reject_links: true
+  never_overwrite_run: true
+  finalize_immutable: true
 
 models:
   llm:
@@ -536,6 +597,7 @@ web:
 publishing:
   require_approval: true
   require_citations: true
+  require_comparison_report: true
 ```
 
 임계값이 `null`인 항목은 임의 기본값으로 운영하지 않고 평가 세트로 보정한 뒤 배포 설정에서 확정한다.
@@ -552,6 +614,7 @@ publishing:
 - 외부 질의 비식별화와 차단 규칙
 - 주장·근거·인용 스키마 검증
 - 체크포인트 상태 전이
+- before/after 경로 가드, run ID, finalization 상태 전이
 
 ### 11.2 통합 테스트
 
@@ -562,6 +625,7 @@ publishing:
 - 웹 검색 비활성 모드와 허용 모드
 - 프로세스 중단 후 체크포인트 재개
 - 모델과 프롬프트 버전 변경 시 선택적 재처리
+- 신규 run 준비, 입력 복사 해시 검증, added·modified·removed·unchanged 비교
 
 ### 11.3 아키텍처 테스트
 
@@ -579,6 +643,9 @@ publishing:
 - ACL이 다른 문서의 교차 누출 차단
 - 로그와 예외에 API 키와 원문이 노출되지 않는지 검사
 - 로컬 주소와 메타데이터 서비스 URL 접근 차단
+- 스킬과 워커의 Confluence·비밀 저장소 접근 0건
+- `data/before` 쓰기·삭제·이동과 기존 run overwrite 0건
+- symlink·junction·`..`·절대 경로를 통한 승인 경로 탈출 차단
 
 ### 11.5 검색·분류·합성 평가
 
@@ -602,6 +669,7 @@ publishing:
 - 임의 종료 후 중복 산출물 없이 재개
 - 손상 문서 1%가 포함되어도 나머지 문서 처리 계속
 - 디스크 부족, 네트워크 제한, 검색 API 제한, 모델 로드 실패 시 명확한 실패 상태와 재시도 가능성 제공
+- 비교 도중 종료되어도 기존 run과 보고서가 손상되지 않고 새 실행으로 복구
 - 운영 컨텍스트에서 스왑 지속 증가가 없어야 함
 
 ## 12. 관측성과 운영
@@ -674,7 +742,7 @@ publishing:
 
 - 근거 카드와 계층형 Map-Reduce
 - 주제별 Markdown, 인덱스, 충돌, 제안 업데이트 문서
-- 인용 검증과 게시 승인
+- before/after 비교 리포트, 인용 검증, 게시 승인
 - 선택적 단일 Markdown 내보내기
 
 종료 조건은 모든 게시 사실 문장의 근거 커버리지 100%, 인용 정확도 게이트 통과, 동일 입력의 결정적 재생성이다.
@@ -698,6 +766,8 @@ publishing:
 | 의미 중복 오판 | 서로 다른 버전과 정책 병합 | 원본 불변, 군집만 저장, 권위와 버전 기반 정규본, 충돌 보존 |
 | 웹 검색을 통한 내부정보 유출 | 보안 사고 | 기본 비활성, 질의 재구성, 민감정보 차단, 감사 로그, 승인 |
 | 웹 프롬프트 인젝션 | 잘못된 도구 호출과 오염 | 웹을 비신뢰 데이터로 격리, 도구 권한 제거, 도메인 정책 |
+| AI의 원본 폴더 오염 | 기준선 손실과 비교 불가 | OS 읽기 전용 권한, 경로 가드, 신규 run 전용 쓰기, 기존 run 불변 |
+| Confluence 자격정보 노출 | 원본 시스템 침해 | API 연동 제거, 외부 승인 내보내기, 스킬·워커 secret 접근 금지 |
 | 최신 공개 버전으로 내부 고정 버전 오염 | 잘못된 운영 문서 | 내부 상태, 외부 상태, 변경 제안 분리, 사람 승인 |
 | LLM 합성 환각 | 신뢰도 저하 | 주장 단위 근거, 인용 강제, 근거 없는 문장 게시 차단 |
 | 파서 품질 저하 | 표, 코드, 페이지 인용 손실 | 포맷별 골든 파일, 구조 보존, OCR 선택 적용, 격리 |
@@ -713,6 +783,7 @@ publishing:
 5. 웹 검증은 보안팀이 egress 정책과 허용 도메인을 승인한 후 활성화한다.
 6. 단일 거대 문서보다 주제별 정본과 근거 매니페스트를 먼저 제공한다.
 7. 32K 컨텍스트는 목표가 아니라 조건부 최적화로 관리한다.
+8. 외부 문서 소스 연동보다 폴더 리비전 경계와 비교 재현성을 먼저 구현한다.
 
 ## 16. 최종 완료 정의
 
@@ -723,6 +794,9 @@ publishing:
 - Track A 품질 게이트와 4시간 안정성 시험을 통과한다.
 - Track B가 36GB 대상 장비에서 승인된 컨텍스트로 OOM 없이 동작한다.
 - 원본 사내 문서가 자동 변경되거나 외부로 전송되지 않는다.
+- Confluence API 키가 설정, 로그, 프롬프트, 매니페스트, 워커 환경에 존재하지 않는다.
+- 모든 수정은 신규 `data/after` run에 있고 `data/before` 해시가 실행 전후 동일하다.
+- finalization된 run마다 입력 매니페스트와 파일별 비교 보고서가 존재한다.
 - 외부 검색 요청에서 민감정보 누출이 0건이다.
 - 게시 사실 문장의 근거 커버리지가 100%다.
 - 충돌, 미확인, 제안 변경이 확정 사실과 명확히 분리된다.

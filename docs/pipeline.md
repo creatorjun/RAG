@@ -5,6 +5,7 @@
 
 ```mermaid
 flowchart TD
+    PRE["PREPARE_REVISION_RUN"] --> A["DISCOVER"]
     A["DISCOVER"] --> B["SNAPSHOT"]
     B --> C{"FILE_EXACT_DEDUP"}
     C -->|"기존 리비전"| Z["SKIP_UNCHANGED"]
@@ -40,10 +41,11 @@ flowchart TD
     AB --> AC["VERIFY_CITATIONS"]
     AC --> AD{"PUBLISH_GATE"}
     AD -->|"pass"| AE["PUBLISH_GENERATION"]
+    AE --> AG["COMPARE_AND_FINALIZE"]
     AD -->|"fail"| AF["REVIEW_ARTIFACT"]
 ```
 
-Track A는 `DISCOVER`부터 `BUILD_VECTOR_GENERATION`까지다. Track B는 `PRIORITIZE_VALIDATION`부터 `VERIFY_CITATIONS`까지다. 승인과 게시 단계는 Coordinator가 수행한다.
+`PREPARE_REVISION_RUN`, 승인, 게시, `COMPARE_AND_FINALIZE`는 Coordinator가 수행한다. Track A는 `DISCOVER`부터 `BUILD_VECTOR_GENERATION`까지고 Track B는 `PRIORITIZE_VALIDATION`부터 `VERIFY_CITATIONS`까지다.
 
 ## 2. 공통 단계 계약
 
@@ -67,7 +69,7 @@ Track A는 `DISCOVER`부터 `BUILD_VECTOR_GENERATION`까지다. Track B는 `PRIO
 
 ### 3.1 `DISCOVER`
 
-입력은 source ID, source scope, cursor다. 출력은 `DocumentCandidate` 페이지와 다음 cursor다.
+입력은 `data/before` source ID, 데이터셋 scope, cursor다. 출력은 `DocumentCandidate` 페이지와 다음 cursor다. 시작 전에 신규 after run과 입력 매니페스트가 준비돼 있어야 한다.
 
 처리 규칙:
 
@@ -170,7 +172,7 @@ PDF OCR 결정은 페이지별 텍스트 문자 수, 비공백 비율, 유효 �
 
 #### 3.8.1 메타데이터 점수
 
-승인된 규칙 파일에서 경로, Confluence space, 태그, 작성 부서를 읽는다. 규칙별 가중치는 0~1이며 여러 규칙은 `1 - product(1 - score_i)`로 결합한다.
+승인된 규칙 파일에서 데이터셋, 상대 경로, 태그, 작성 부서를 읽는다. 규칙별 가중치는 0~1이며 여러 규칙은 `1 - product(1 - score_i)`로 결합한다.
 
 #### 3.8.2 규칙 점수
 
@@ -437,8 +439,28 @@ Markdown AST를 파싱해 사실 문장과 표 셀을 식별한다. 각 대상�
 - artifact generation 승인
 - 모든 파일과 매니페스트 해시 검증
 - 활성 ACL 교집합 비어 있지 않음
+- before 입력 해시 재검사 성공
+- current after run 이외의 쓰기 0건
 
-게시 활성화는 새 세대 디렉터리의 원자적 rename과 DB 활성 세대 변경으로 수행한다. 두 작업 사이 실패하면 기존 세대를 유지하고 새 세대를 재검증 대상으로 남긴다.
+게시 후보는 current after run의 `documents`에 기록한다. 이후 before와 documents를 비교해 added·modified·removed·unchanged, 전후 SHA-256, 텍스트 diff를 `_reports`에 원자적으로 생성한다. 비교 보고서와 입력 해시 검증이 끝나면 run을 finalization하고, 실패하면 기존 run과 before를 변경하지 않은 채 새 run으로 재시도한다.
+
+### 5.7 폴더 리비전 단계 계약
+
+`PREPARE_REVISION_RUN`은 before·after root 비중첩, before 읽기 전용, link 부재, run ID 유효성, 기존 run 부재를 검사한다. staging에 before 파일을 복사하면서 원본과 복사본의 SHA-256을 비교하고, 모두 일치할 때만 `runs/<run_id>`로 원자적 rename한다.
+
+수정 단계는 current run의 `documents` 아래 상대 경로만 허용한다. 모델이 절대 경로, `..`, URL, 다른 run, `_reports`를 출력해도 정책 계층이 거부한다.
+
+`COMPARE_AND_FINALIZE` 순서는 고정한다.
+
+1. before와 documents 트리의 link·특수 파일·경로 탈출 재검사
+2. 상대 경로 합집합 계산과 정렬
+3. 파일 존재 여부와 SHA-256으로 네 상태 판정
+4. UTF-8 텍스트 변경에 unified diff 생성
+5. 비교 JSON과 Markdown을 임시 파일에 작성하고 fsync·rename
+6. before 입력 매니페스트 해시 재검증
+7. DB 비교 레코드와 run finalization 원자 커밋
+
+finalization 후 writer 요청은 `RUN_FINALIZED`로 거부한다. 보고서 수정이나 정정이 필요하면 이전 run을 보존하고 새 run을 준비한다.
 
 ## 6. 재시도와 격리
 
@@ -451,7 +473,7 @@ delay = min(base_seconds * 2^(attempt - 1), maximum_seconds) + deterministic_jit
 | 오류 | base | max | 시도 |
 | --- | ---: | ---: | ---: |
 | 소스 busy | 5초 | 120초 | 3 |
-| Confluence rate limit | 응답 지시 또는 30초 | 900초 | 3 |
+| before 파일 변경 중 | 5초 | 120초 | 3 |
 | 외부 검색 timeout | 10초 | 120초 | 3 |
 | 메모리 압박 | 30초 | 300초 | 3 |
 | 내부 일시 오류 | 5초 | 60초 | 1 |
@@ -469,6 +491,10 @@ deterministic jitter는 job ID 해시로 계산해 재현 가능하게 한다.
 | `UNMAPPABLE_SOURCE_SPAN` | 리비전 | 파서 결함 조사 |
 | `UNSPLITTABLE_STRUCTURE` | 요소 | 청킹 정책 검토 |
 | `SECURITY_POLICY_BLOCK` | 질의 | 보안 검토 |
+| `PATH_ESCAPE` | 경로 | run 중단과 보안 검토 |
+| `LINK_NOT_ALLOWED` | 파일 | 데이터 관리자에게 재배치 요청 |
+| `INPUT_HASH_CHANGED` | before 스냅샷 | run 중단과 새 스냅샷 준비 |
+| `RUN_ALREADY_EXISTS` | run | 새 run ID 생성 |
 
 격리 객체는 원본 CAS 참조, 안전한 오류, 파서·설정 버전, 재처리 조건을 가진다.
 
@@ -488,6 +514,7 @@ deterministic jitter는 job ID 해시로 계산해 재현 가능하게 한다.
 | 변경 요소 | 재실행 시작 단계 |
 | --- | --- |
 | 소스 내용 | `SNAPSHOT` 이후 전체 |
+| before 입력 매니페스트 | 새 revision run 준비 후 전체 |
 | ACL만 변경 | 새 revision, `CHUNK` 이후 파생물 재생성 |
 | parser 버전 | `PARSE` |
 | normalize 규칙 | `NORMALIZE` |
@@ -528,4 +555,7 @@ progress는 문서 수, 페이지 수, 청크 수, 배치 수처럼 민감하지
 - `uncertain`과 conflict 데이터 손실 0건
 - 웹 비활성 모드에서 외부 네트워크 호출 0건
 - 승인 없는 변경이 게시 사실에 포함된 건수 0건
+- 실행 전후 `data/before` 해시 변화 0건
+- 기존·finalized run overwrite 0건
+- 모든 finalized run의 비교 상태 합계와 파일 합집합 크기 일치
 - 게시 사실 문장 근거 커버리지 100%

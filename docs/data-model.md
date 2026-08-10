@@ -9,12 +9,23 @@
 | CAS 파일 저장소 | 원본, 정규화 JSON, 외부 근거 본문, 프롬프트·응답, 산출물 | SHA-256 객체 | 해시 디렉터리 |
 | FAISS 세대 | dense 벡터 인덱스와 ID 맵 | 불변 세대 | 세대 디렉터리 |
 | 로그 저장소 | 구조화 운영·감사 로그 | append-only 파일 | 날짜·크기 회전 파일 |
+| Before/After 작업공간 | 불변 입력 스냅샷, 실행별 수정 문서, 비교 보고서 | 폴더 run | finalized run 디렉터리 |
 
 SQLite에는 CAS 객체 키와 체크섬을 저장한다. DB 행이 참조하지 않는 임시 객체는 고아 정리 대상이며, DB가 참조하는 객체는 파일 보존 기간과 무관하게 삭제할 수 없다.
 
 ## 2. 저장 경로
 
 ```text
+data/
+├── before/
+│   └── <dataset>/
+└── after/
+    └── runs/
+        └── <run_id>/
+            ├── documents/
+            ├── _reports/
+            └── run-manifest.json
+
 var/
 ├── objects/
 │   └── sha256/
@@ -46,6 +57,8 @@ var/
 
 CAS object key 형식은 `sha256/ab/cd/<64-hex>`다. 경로 입력은 object key 생성기만 만들며 외부 입력을 직접 연결하지 않는다.
 
+`data/before`는 DB와 CAS 밖의 승인 입력 경계지만 인제스천 즉시 CAS에 불변 스냅샷을 만든다. `data/after` finalized run은 사람이 검토하는 전달 산출물이므로 DB 매니페스트와 함께 백업한다.
+
 ## 3. ID와 시간 규칙
 
 ### 3.1 추적 ID
@@ -56,7 +69,7 @@ CAS object key 형식은 `sha256/ab/cd/<64-hex>`다. 경로 입력은 object key
 
 | ID | 정규화 입력 |
 | --- | --- |
-| `source_id` | source type, canonical source URI |
+| `source_id` | `folder_snapshot`, 정규화 before root URI, 데이터셋 상대 경로 |
 | `document_id` | source ID, external key |
 | `revision_id` | document ID, source version, content SHA-256, ACL fingerprint |
 | `normalized_id` | revision ID, parser ID, parser version, parser option hash |
@@ -120,7 +133,7 @@ CREATE TABLE stored_object (
 ```sql
 CREATE TABLE document_source (
     source_id TEXT PRIMARY KEY,
-    source_type TEXT NOT NULL CHECK (source_type IN ('filesystem', 'confluence')),
+    source_type TEXT NOT NULL CHECK (source_type IN ('folder_snapshot')),
     canonical_uri TEXT NOT NULL UNIQUE,
     display_name TEXT NOT NULL,
     enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
@@ -520,8 +533,8 @@ CREATE TABLE approval_decision (
     previous_approval_id TEXT REFERENCES approval_decision(approval_id) ON DELETE RESTRICT
 );
 
-CREATE UNIQUE INDEX ux_latest_approval_chain_root
-ON approval_decision(target_type, target_id, approval_id);
+CREATE INDEX ix_approval_target_time
+ON approval_decision(target_type, target_id, decided_at DESC);
 
 CREATE TABLE synthesis_artifact (
     artifact_id TEXT PRIMARY KEY,
@@ -578,7 +591,7 @@ WHERE status = 'active';
 CREATE TABLE pipeline_run (
     run_id TEXT PRIMARY KEY,
     run_type TEXT NOT NULL CHECK (
-        run_type IN ('benchmark', 'ingestion', 'validation', 'synthesis', 'maintenance')
+        run_type IN ('benchmark', 'revision', 'ingestion', 'validation', 'synthesis', 'maintenance')
     ),
     pipeline_fingerprint TEXT NOT NULL,
     config_object_key TEXT NOT NULL REFERENCES stored_object(object_key) ON DELETE RESTRICT,
@@ -591,6 +604,36 @@ CREATE TABLE pipeline_run (
     started_at TEXT,
     finished_at TEXT,
     cancellation_requested_at TEXT
+);
+
+CREATE TABLE document_revision_run (
+    revision_run_id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL UNIQUE REFERENCES pipeline_run(run_id) ON DELETE RESTRICT,
+    before_manifest_object_key TEXT NOT NULL REFERENCES stored_object(object_key) ON DELETE RESTRICT,
+    before_manifest_sha256 TEXT NOT NULL,
+    output_directory_path TEXT NOT NULL UNIQUE,
+    comparison_object_key TEXT REFERENCES stored_object(object_key) ON DELETE RESTRICT,
+    comparison_sha256 TEXT,
+    state TEXT NOT NULL CHECK (state IN ('prepared', 'finalized', 'failed')),
+    prepared_at TEXT NOT NULL,
+    finalized_at TEXT,
+    CHECK (
+        (state = 'finalized' AND comparison_object_key IS NOT NULL AND comparison_sha256 IS NOT NULL AND finalized_at IS NOT NULL)
+        OR state <> 'finalized'
+    )
+);
+
+CREATE TABLE document_file_comparison (
+    revision_run_id TEXT NOT NULL REFERENCES document_revision_run(revision_run_id) ON DELETE RESTRICT,
+    relative_path TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('added', 'modified', 'removed', 'unchanged')),
+    before_sha256 TEXT,
+    after_sha256 TEXT,
+    before_byte_count INTEGER CHECK (before_byte_count IS NULL OR before_byte_count >= 0),
+    after_byte_count INTEGER CHECK (after_byte_count IS NULL OR after_byte_count >= 0),
+    diff_object_key TEXT REFERENCES stored_object(object_key) ON DELETE RESTRICT,
+    PRIMARY KEY (revision_run_id, relative_path),
+    CHECK (before_sha256 IS NOT NULL OR after_sha256 IS NOT NULL)
 );
 
 CREATE TABLE stage_run (
@@ -783,6 +826,8 @@ ACL fingerprint는 보안 등급과 정렬된 `(principal_type, principal_id, pe
 | 데이터 | 기본 보존 | 삭제 조건 |
 | --- | --- | --- |
 | 원본 리비전 | 무기한 | 승인된 별도 데이터 보존 정책 필요 |
+| `data/before` 스냅샷 | 데이터 관리자 정책 | 활성·감사 run이 참조하는 동안 삭제 금지 |
+| finalized after run | 최근 10개 이상 | 승인·감사·게시 참조 제외 불가 |
 | 정규화 객체 | 원본과 동일 | 재생성 가능해도 기본 보존 |
 | 비활성 FAISS 세대 | 최근 3개 | 활성·롤백 세대 제외 |
 | 비활성 산출물 세대 | 최근 10개 | 승인·감사 참조 제외 |
@@ -804,6 +849,7 @@ ACL fingerprint는 보안 등급과 정렬된 `(principal_type, principal_id, pe
 5. DB가 참조하는 CAS 객체 목록
 6. 설정 스냅샷과 파이프라인 지문
 7. backup manifest와 전체 체크섬
+8. 활성 입력 매니페스트와 finalized after run 비교 보고서
 
 복구는 격리 디렉터리에서 체크섬, SQLite foreign key, object reference, FAISS 벡터 수, 산출물 근거 매니페스트를 검증한 뒤 활성 경로를 교체한다.
 
@@ -819,3 +865,5 @@ ACL fingerprint는 보안 등급과 정렬된 `(principal_type, principal_id, pe
 - 승인 append-only 체인 시험
 - CAS 객체 누락과 해시 불일치 탐지 시험
 - backup manifest 기반 빈 호스트 복구 시험
+- before 해시 변화 탐지와 finalized run 쓰기 거부 시험
+- file comparison 상태·NULL 조합 CHECK 제약 시험

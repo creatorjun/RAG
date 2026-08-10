@@ -36,11 +36,11 @@ install/
 
 1. macOS와 사용 가능 통합 메모리 확인
 2. APFS 여유 공간 확인
-3. 전용 OS 사용자와 `var_root` 생성
+3. 전용 OS 사용자, `data/before`, `data/after`, `var_root` 생성
 4. Python 3.12와 `uv` 확인
 5. lockfile 기반 의존성 설치
 6. 모델 파일 다운로드와 해시 검증
-7. Keychain secret 등록
+7. 웹 검색을 활성화하는 환경에서만 Tavily Keychain secret 등록
 8. `config/production.yaml` 생성과 스키마 검사
 9. SQLite 초기 migration
 10. `rag doctor` 실행
@@ -56,12 +56,16 @@ install/
 | Python·macOS 지원 버전 | fatal |
 | 설정 스키마와 경로 | fatal |
 | source와 var root 겹침 | fatal |
+| before·after·var root 비중첩 | fatal |
+| before read-only와 after 신규 run write | fatal |
+| before/after link·junction 없음 | fatal |
 | SQLite open, WAL, foreign key | fatal |
 | CAS write·read·hash·delete 임시 객체 | fatal |
 | 모델 manifest와 파일 hash | fatal |
 | BGE descriptor와 출력 차원 | fatal |
 | Qwen 최소 32토큰 생성 | fatal |
-| Keychain secret 존재 | 웹·Confluence 활성일 때 fatal |
+| Tavily Keychain secret 존재 | 웹 활성일 때만 fatal |
+| Confluence 금지 설정 키 부재 | fatal |
 | 외부 웹 disabled 차단 | fatal |
 | FAISS smoke index build·search | fatal |
 | artifact 임시 세대 활성화·롤백 | fatal |
@@ -160,7 +164,8 @@ rag run status --latest
 ### 6.2 증분 인제스천
 
 ```text
-rag ingest --source <source-id>
+rag revision prepare --run-id <revision-run-id>
+rag ingest --source before-folder --revision-run <revision-run-id>
 rag run status <run-id> --watch
 ```
 
@@ -171,6 +176,7 @@ rag run status <run-id> --watch
 - classification uncertain 비율
 - 새 vector generation ID와 smoke 결과
 - 메모리 pressure 이벤트
+- 입력 매니페스트 파일 수와 before SHA-256 재검증
 
 ### 6.3 검증과 합성
 
@@ -178,10 +184,12 @@ rag run status <run-id> --watch
 rag validate --source-run <run-id>
 rag review list --status pending
 rag synthesize --taxonomy-version <version>
-rag publish --generation <generation-id>
+rag publish --generation <generation-id> --revision-run <revision-run-id>
+rag revision compare --run-id <revision-run-id>
+rag revision finalize --run-id <revision-run-id>
 ```
 
-게시 전 `citation coverage=1.0`, 미결 필수 승인 0, artifact manifest 검증을 확인한다.
+게시 전 `citation coverage=1.0`, 미결 필수 승인 0, artifact manifest, before 해시 불변, comparison report 검증을 확인한다.
 
 ### 6.4 안전 종료
 
@@ -240,8 +248,9 @@ Coordinator는 새 작업 수락을 중지하고, 실행 중 작업에 취소를
 6. DB 참조 CAS object 목록 생성
 7. CAS 객체 존재·해시 검사
 8. 설정과 model manifest 복사
-9. 전체 backup manifest 생성
-10. 임시 백업 디렉터리를 원자적으로 완료 상태로 변경
+9. 참조 중인 before 입력 매니페스트와 finalized after run 복사
+10. 전체 backup manifest 생성
+11. 임시 백업 디렉터리를 원자적으로 완료 상태로 변경
 
 ### 8.3 백업 합격 기준
 
@@ -251,6 +260,7 @@ Coordinator는 새 작업 수락을 중지하고, 실행 중 작업에 취소를
 - 활성 FAISS vector count와 DB member count 일치
 - artifact evidence manifest 검증 성공
 - 모든 파일 hash 일치
+- finalized run의 comparison hash와 documents hash 일치
 
 ## 9. 복구
 
@@ -264,9 +274,10 @@ Coordinator는 새 작업 수락을 중지하고, 실행 중 작업에 취소를
 6. CAS reference 검사
 7. FAISS smoke query
 8. artifact citation manifest 검사
-9. Coordinator를 read-only로 시작
-10. 운영자 승인 후 활성 `var_root` 교체
-11. 작은 증분 ingest 실행
+9. finalized after run의 비교 매니페스트 검사
+10. Coordinator를 read-only로 시작
+11. 운영자 승인 후 활성 `var_root` 교체
+12. 작은 증분 ingest 실행
 
 ### 9.2 롤백
 
@@ -380,9 +391,10 @@ Coordinator는 새 작업 수락을 중지하고, 실행 중 작업에 취소를
 - production 설정과 fingerprint 보관
 - model·dependency manifest 해시 일치
 - 16K 성능·메모리 gate 통과
-- source read-only와 var path 분리
+- before read-only, after 신규 run write, var path 분리
 - 웹 disabled 확인 또는 egress 승인 확인
-- Keychain secret 노출 검사
+- Tavily Keychain secret 노출과 Confluence 자격정보 부재 검사
+- before 해시 불변과 finalized run overwrite 차단 검사
 - 골든 코퍼스 end-to-end 통과
 - backup 생성과 복구 통과
 - 알림 수신 경로 시험

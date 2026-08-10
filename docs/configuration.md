@@ -5,7 +5,8 @@
 
 - 모든 실행은 병합 완료된 설정 스냅샷을 CAS에 저장한다.
 - 실행 중 설정 파일 변경은 현재 실행에 반영하지 않는다.
-- 비밀값은 설정 파일에 저장하지 않고 Keychain 참조만 저장한다.
+- Confluence 자격정보는 설정 스키마 자체에 존재하지 않는다.
+- 선택적 공개 웹 검색 비밀만 설정 파일 대신 Keychain 참조로 저장한다.
 - 환경별 설정은 값만 바꾸며 스키마와 의미를 바꾸지 않는다.
 - 품질 임계값이 `null`이면 해당 자동 판정을 활성화하지 않는다.
 - 알 수 없는 키는 경고가 아니라 시작 오류다.
@@ -21,7 +22,7 @@
 4. 허용된 `RAG_` 환경 변수
 5. CLI의 명시적 일회성 override
 
-비밀값은 병합 대상이 아니며 `secret_ref`를 통해 런타임에 조회한다. CLI override는 벤치마크와 운영자가 승인한 제한 항목에만 허용한다.
+비밀값은 병합 대상이 아니며 웹 검색이 활성화된 경우에만 `secret_ref`를 통해 Coordinator가 조회한다. 문서 폴더 스킬과 모델 워커는 비밀 참조를 받을 수 없다. CLI override는 벤치마크와 운영자가 승인한 제한 항목에만 허용한다.
 
 ## 3. 전체 설정 기준안
 
@@ -30,6 +31,8 @@ schema_version: 1
 environment: development
 
 paths:
+  before_root: "./data/before"
+  after_root: "./data/after"
   var_root: "./var"
   database: "./var/database/metadata.sqlite3"
   object_store: "./var/objects"
@@ -65,13 +68,18 @@ sources:
   max_file_bytes: 2147483648
   inventory_page_size: 100
   reject_symlinks: true
-  allowed_roots: []
-  confluence:
-    enabled: false
-    base_url: null
-    secret_ref: null
-    request_timeout_seconds: 30
-    page_size: 50
+  allowed_roots:
+    - "./data/before"
+
+document_workspace:
+  run_id_pattern: "^[a-z0-9][a-z0-9._-]{1,62}[a-z0-9]$"
+  preserve_relative_paths: true
+  reject_symlinks: true
+  reject_junctions: true
+  never_overwrite_run: true
+  require_input_manifest: true
+  require_comparison_report: true
+  finalize_immutable: true
 
 parsing:
   parser_version: "1"
@@ -220,7 +228,10 @@ backup:
 ### 4.1 경로
 
 - 모든 write path는 `var_root` 아래여야 한다.
-- source `allowed_roots`는 `var_root`와 겹치지 않아야 한다.
+- 예외적으로 게시 write path인 `after_root`만 `var_root` 밖에서 허용한다.
+- source `allowed_roots`는 정확히 `before_root`만 포함하고 `var_root`, `after_root`와 겹치지 않아야 한다.
+- `before_root`에는 쓰기·삭제·이동 권한이 없어야 하고 `after_root`에는 신규 run 생성 권한만 필요하다.
+- run ID와 문서 상대 경로는 정규화 후 `after_root/runs/<run_id>`를 벗어날 수 없다.
 - object store, database, vector index, artifact, staging, quarantine는 서로 중첩하지 않는다.
 - 심볼릭 링크 해석 후에도 동일 조건을 검사한다.
 
@@ -277,7 +288,7 @@ backup:
 | `RAG_WEB_ENABLED` | `web.enabled` | 승인된 운영 전환 |
 | `RAG_CONFIG_FILE` | 환경 설정 파일 | 명시 설정 경로 |
 
-모델 ID, 모델 revision, 허용 도메인, ACL, 품질 임계값은 환경 변수로 덮어쓰지 못한다.
+before·after root, 모델 ID, 모델 revision, 허용 도메인, ACL, 품질 임계값은 환경 변수로 덮어쓰지 못한다.
 
 ## 6. CLI Override 허용 목록
 
@@ -321,6 +332,7 @@ fingerprint 입력은 정렬된 JSON으로 직렬화한다.
   },
   "prompt_versions": {},
   "taxonomy_version": "1",
+  "document_workspace_policy_version": "1",
   "web_policy_version": "1",
   "citation_verifier_version": "1"
 }
@@ -338,7 +350,9 @@ fingerprint 입력은 정렬된 JSON으로 직렬화한다.
 | `CONFIG_TYPE_ERROR` | 타입 불일치 |
 | `CONFIG_RANGE_ERROR` | 범위·관계 위반 |
 | `CONFIG_PATH_ESCAPE` | 승인 루트 탈출 |
-| `CONFIG_SECRET_REF_MISSING` | Keychain 참조 없음 |
+| `CONFIG_SECRET_REF_MISSING` | 활성화된 외부 웹 검색의 Keychain 참조 없음 |
+| `CONFIG_BEFORE_WRITABLE` | before root가 AI 실행 계정에 쓰기 가능 |
+| `CONFIG_WORKSPACE_OVERLAP` | before, after, var root 중첩 |
 | `CONFIG_MODEL_UNPINNED` | production 모델 revision 미고정 |
 | `CONFIG_THRESHOLD_UNCALIBRATED` | production 자동 판정 임계값 미설정 |
 | `CONFIG_WEB_POLICY_INCOMPLETE` | 웹 활성화 조건 미충족 |
@@ -353,6 +367,9 @@ fingerprint 입력은 정렬된 JSON으로 직렬화한다.
 - 환경 변수 허용 목록 외 무시가 아니라 거부
 - production의 unpinned model 거부
 - 웹 활성화 필수값 검사
+- before read-only·after write·root 비중첩 검사
+- Confluence URL·secret·provider 같은 금지 설정 키 거부
+- run ID와 상대 경로 escape fixture 차단
 - 경로 탈출과 symlink 검사
 - 동일 설정의 정규 JSON과 fingerprint 결정성
 - 설정 변경별 단계 sub-fingerprint 무효화 확인

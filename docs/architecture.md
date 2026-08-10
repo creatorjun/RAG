@@ -10,9 +10,10 @@
 ```mermaid
 flowchart LR
     OP["운영자"] --> CLI["로컬 CLI/API"]
-    FS["승인된 파일 루트"] --> SYS["Enterprise RAG"]
-    CF["Confluence"] --> SYS
-    SYS --> WIKI["주제별 Markdown 산출물"]
+    EX["외부 승인 내보내기"] --> BEFORE["data/before 읽기 전용"]
+    BEFORE --> SYS["Enterprise RAG"]
+    SYS --> AFTER["data/after 신규 run"]
+    AFTER --> WIKI["검토·게시 채널"]
     SYS --> DB["SQLite·FAISS·CAS"]
     SYS -. "기본 차단" .-> WEB["허용된 공개 웹"]
     SEC["보안 승인자"] --> SYS
@@ -25,15 +26,17 @@ flowchart LR
 - 기술 관련성 분류, 중복 군집, 벡터 인덱싱
 - 주장 추출, 선택적 공개 웹 검증, 충돌 탐지
 - 승인 관리, 근거 기반 합성, 산출물 게시
+- 신규 폴더 run 준비, 경로 가드, 입력 매니페스트, 전후 비교와 finalization
 - 체크포인트, 재시도, 감사, 메트릭, 백업·복구
 
 ### 2.2 시스템 외부 책임
 
-- 소스 시스템의 원본 수명 주기와 원본 ACL 관리
+- 소스 시스템의 원본 수명 주기, 원본 ACL, 자격정보, 승인된 파일 내보내기
 - 외부 웹 정보의 정확성 보장
 - 보안 정책과 허용 도메인 승인
 - 변경 제안의 업무적 채택 여부 결정
 - 생성 산출물의 최종 배포 채널 관리
+- `data/before` 배치 전 민감정보·sidecar 검토와 finalization 후 원본 시스템 반영
 
 ## 3. 컨테이너와 프로세스 토폴로지
 
@@ -46,6 +49,7 @@ flowchart TB
         SCHED["Resource Scheduler"]
         META["Metadata Repository"]
         PUB["Artifact Publisher"]
+        FOLDER["Folder Revision Workspace"]
         WEBG["Web Egress Gateway"]
     end
     subgraph AW["Track A Worker Process"]
@@ -69,6 +73,7 @@ flowchart TB
     BW --> STORE
     META --> STORE
     PUB --> STORE
+    FOLDER --> STORE
     WEBG --> STORE
 ```
 
@@ -81,7 +86,8 @@ Coordinator는 장기 생존 프로세스이며 다음 리소스를 소유한다
 - 작업 큐, 리스, 체크포인트
 - 워커 프로세스 생성·종료·상태 감시
 - 외부 HTTP 클라이언트와 egress 정책
-- 게시 디렉터리의 원자적 교체
+- `data/before`의 읽기 전용 루트와 현재 `data/after` run 경계
+- 게시·비교 디렉터리의 원자적 파일 교체
 - 구조화 로그와 메트릭 수집
 
 Coordinator는 MLX 또는 BGE 모델을 import하거나 적재하지 않는다. 모델 런타임 오류와 Metal 메모리 단편화가 제어 plane에 전파되지 않도록 한다.
@@ -158,6 +164,8 @@ flowchart TB
 | `ValidationService` | 주장·근거 | 검증 보고서·제안 | 없음 |
 | `SynthesisService` | 승인된 근거 카드 | 주제 산출물 | Qwen 세션은 워커가 소유 |
 | `ArtifactPublisher` | 검증된 임시 산출물 | 활성 산출물 세대 | 임시·활성 디렉터리 |
+| `FolderRevisionWorkspace` | before root, 신규 run ID | run 문서 트리·입력 매니페스트 | 현재 run과 staging 디렉터리 |
+| `FolderTreeComparator` | before tree, run documents | 상태·해시·unified diff | 현재 run의 `_reports` |
 | `CheckpointManager` | 단계 결과 | 완료 상태·후속 작업 | SQLite 트랜잭션 |
 
 ## 6. 런타임 데이터 흐름
@@ -172,7 +180,10 @@ sequenceDiagram
     participant A as Track A Worker
     participant M as Metadata DB
     participant V as FAISS Generation
-    O->>C: ingest(source_scope)
+    O->>C: prepare revision run
+    C->>C: validate before/after boundary
+    C->>M: store input manifest
+    O->>C: ingest(data/before scope)
     C->>S: inventory(cursor)
     S-->>C: DocumentCandidate stream
     C->>M: compare source version and hash
@@ -192,7 +203,7 @@ sequenceDiagram
     end
 ```
 
-단계 결과와 후속 작업 생성은 같은 SQLite 트랜잭션에서 커밋한다. FAISS는 파일 시스템에 임시 세대를 만든 뒤 해시와 벡터 수를 검증하고 활성 세대 포인터만 트랜잭션으로 변경한다.
+단계 결과와 후속 작업 생성은 같은 SQLite 트랜잭션에서 커밋한다. FAISS는 파일 시스템에 임시 세대를 만든 뒤 해시와 벡터 수를 검증하고 활성 세대 포인터만 트랜잭션으로 변경한다. 입력 스냅샷은 `data/before`에서 읽기만 하고 모든 수정 파일은 현재 run의 `documents` 아래에 생성한다.
 
 ### 6.2 주장 추출과 검증
 
@@ -239,9 +250,10 @@ sequenceDiagram
     alt verification fails
         C->>M: reject artifact and create review job
     else verification passes
-        C->>P: publish inactive generation
-        P-->>C: manifest checksum
-        C->>M: activate artifact generation
+        C->>P: write current run documents
+        P-->>C: artifact manifest checksum
+        C->>C: compare before and after trees
+        C->>M: commit comparison and finalize run
     end
 ```
 

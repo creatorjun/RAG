@@ -22,6 +22,7 @@
 | [data-model.md](data-model.md) | 백엔드·데이터 개발자 | Milestone 1 | SQLite 스키마, ID, 파일 저장, FAISS 세대, 마이그레이션 |
 | [pipeline.md](pipeline.md) | 파이프라인 개발자 | Milestone 1~5 | 단계 상태, 멱등성, 재시도, 분류, 중복, 검증, 합성 알고리즘 |
 | [configuration.md](configuration.md) | 전체 개발자, 운영자 | 최초 | 설정 스키마, 우선순위, 유효성 검증, 파이프라인 지문 |
+| [folder-revision-workflow.md](folder-revision-workflow.md) | AI 워크플로 개발자, 운영자 | Milestone 1, 5 | before/after 폴더, run 수명 주기, 비교, 권한 경계 |
 | [security.md](security.md) | 보안 담당자, 개발자 | 전체 | 신뢰 경계, ACL, 외부 반출, SSRF, 인젝션, 비밀정보, 감사 |
 | [operations.md](operations.md) | 운영자, SRE | Milestone 0, 6 | 설치, 벤치마크, 실행, 백업, 복구, 장애 대응, 업그레이드 |
 | [evaluation.md](evaluation.md) | QA, 도메인 전문가 | Milestone 0~6 | 골든 세트, 지표, 합격 기준, 성능·보안·회귀 평가 |
@@ -30,6 +31,7 @@
 | [ADR-0002](adr/0002-local-model-runtime.md) | 모델·플랫폼 개발자 | Milestone 0 | Qwen MLX와 분리 워커 런타임 |
 | [ADR-0003](adr/0003-vector-store.md) | 검색 개발자 | Milestone 2 | SQLite·FAISS 저장 전략과 Qdrant 전환 기준 |
 | [ADR-0004](adr/0004-web-egress-policy.md) | 보안·검색 개발자 | Milestone 4 | 기본 차단 외부 검색과 비식별화 게이트 |
+| [ADR-0005](adr/0005-folder-revision-boundary.md) | 전체 개발자, 운영자 | Milestone 1 | Confluence API 제거와 폴더 리비전 경계 |
 
 ## 3. 계획 추적성
 
@@ -38,6 +40,7 @@
 | 목표 구조, Clean Architecture | `architecture.md`, `module-design.md`, ADR-0001 | `evaluation.md` 아키텍처 검사 |
 | Two-Track 흐름 | `architecture.md`, `pipeline.md` | `evaluation.md` 단계·자원 시험 |
 | 인제스천과 청킹 | `pipeline.md`, `contracts.md` | `evaluation.md` 파서·청킹 골든 세트 |
+| 폴더 기반 수정·비교 | `folder-revision-workflow.md`, `security.md`, ADR-0005 | `evaluation.md` 경로·불변성·diff 시험 |
 | BGE-M3 분류와 중복 제거 | `pipeline.md`, `module-design.md` | `evaluation.md` 분류·중복 지표 |
 | SQLite·FAISS | `data-model.md`, ADR-0003 | `evaluation.md` 일관성·복구 시험 |
 | Qwen 주장 추출과 합성 | `pipeline.md`, `contracts.md`, ADR-0002 | `evaluation.md` 근거·인용 평가 |
@@ -63,6 +66,9 @@
 | 변경 제안 | 원본을 수정하지 않고 별도 승인 대상으로 만든 수정 후보 |
 | 근거 카드 | 합성 입력으로 사용하는 승인된 주장과 인용 묶음 |
 | 산출물 | 주제별 Markdown, 인덱스, 충돌 목록, 근거 매니페스트 |
+| 수정 전 스냅샷 | 외부에서 승인되어 `data/before`에 배치된 AI 읽기 전용 입력 트리 |
+| 수정 후 run | 고유 ID로 생성된 `data/after/runs/<run_id>` 문서·비교 보고서 묶음 |
+| Finalization | 비교 매니페스트를 고정하고 해당 run의 후속 수정을 금지하는 전이 |
 | 파이프라인 지문 | 코드, 설정, 모델, 프롬프트, 파서 버전을 해시한 재현성 식별자 |
 | 인덱스 세대 | 원자적으로 활성화·롤백할 수 있는 FAISS 인덱스 버전 |
 
@@ -78,6 +84,9 @@
 8. Qwen 워커와 BGE 워커는 대상 36GB 환경에서 동시에 가속기 리스를 소유하지 않는다.
 9. 완료된 단계는 같은 멱등성 키로 중복 커밋되지 않는다.
 10. 모든 배포 가능 산출물은 실행 ID, 파이프라인 지문, 근거 매니페스트를 가진다.
+11. `data/before`의 파일 해시는 실행 전후 동일해야 한다.
+12. 모든 수정 결과는 기존 run이 아닌 신규 `data/after/runs/<run_id>`에만 기록한다.
+13. Confluence 자격정보는 설정, 프롬프트, 로그, 매니페스트, 워커 환경에 존재하지 않는다.
 
 ## 6. 문서 유지 규칙
 

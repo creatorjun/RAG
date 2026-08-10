@@ -97,6 +97,69 @@ class DocumentSourcePort(Protocol):
 - 반환된 `content_sha256`은 저장 객체를 다시 읽어 검증 가능하다.
 - 소스 삭제는 기존 저장 객체를 삭제하지 않는다.
 
+### 3.2 Folder Revision 계약
+
+```python
+class RevisionRunState(StrEnum):
+    PREPARED = "prepared"
+    FINALIZED = "finalized"
+
+
+class FileChangeStatus(StrEnum):
+    ADDED = "added"
+    MODIFIED = "modified"
+    REMOVED = "removed"
+    UNCHANGED = "unchanged"
+
+
+@dataclass(frozen=True, slots=True)
+class RevisionRunDto:
+    run_id: str
+    state: RevisionRunState
+    input_manifest_sha256: str
+    input_file_count: int
+    documents_relative_root: str
+
+
+@dataclass(frozen=True, slots=True)
+class FileComparisonDto:
+    relative_path: str
+    status: FileChangeStatus
+    before_sha256: str | None
+    after_sha256: str | None
+    before_byte_count: int | None
+    after_byte_count: int | None
+    diff_relative_path: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class FolderComparisonDto:
+    run_id: str
+    files: tuple[FileComparisonDto, ...]
+    report_sha256: str
+
+
+class DocumentWorkspacePort(Protocol):
+    async def prepare_run(self, run_id: str) -> RevisionRunDto: ...
+
+    async def open_document_writer(
+        self,
+        run_id: str,
+        relative_path: str,
+    ) -> "DocumentWriterPort": ...
+
+    async def compare_run(self, run_id: str) -> FolderComparisonDto: ...
+
+    async def finalize_run(self, run_id: str) -> RevisionRunDto: ...
+```
+
+- `prepare_run`은 기존 run을 절대 덮어쓰지 않고 before 입력 해시를 고정한 뒤에만 성공한다.
+- writer는 정규화한 상대 경로가 현재 run의 `documents` 내부일 때만 열린다.
+- before, 다른 run, `_reports`, manifest에 대한 일반 writer 요청은 거부한다.
+- `compare_run`은 상대 경로 정렬과 SHA-256 비교가 결정적이어야 한다.
+- `finalize_run`은 비교 보고서와 입력 매니페스트를 검증하고 이후 writer 생성을 거부한다.
+- 포트 구현은 Confluence API, 비밀 저장소, 네트워크 클라이언트에 의존하지 않는다.
+
 ## 4. Parser와 Chunker 계약
 
 ```python
@@ -611,6 +674,20 @@ class ApplicationError(Exception):
 | `INTERNAL` | 1 | 실패와 운영 경고 |
 
 예외 context에는 원문, 검색 원문 질의, 비밀값, 사용자 개인정보, 전체 로컬 경로를 포함하지 않는다.
+
+폴더 리비전 경계의 고정 오류 코드는 다음과 같다.
+
+| 코드 | 범주 | 재시도 |
+| --- | --- | ---: |
+| `BEFORE_ROOT_NOT_READABLE` | `SECURITY_BLOCK` | 0 |
+| `BEFORE_ROOT_MUTABLE` | `SECURITY_BLOCK` | 0 |
+| `BEFORE_AFTER_OVERLAP` | `SECURITY_BLOCK` | 0 |
+| `PATH_ESCAPE` | `SECURITY_BLOCK` | 0 |
+| `LINK_NOT_ALLOWED` | `SECURITY_BLOCK` | 0 |
+| `RUN_ALREADY_EXISTS` | `INVALID_INPUT` | 0 |
+| `RUN_FINALIZED` | `INVALID_INPUT` | 0 |
+| `INPUT_HASH_CHANGED` | `CONSISTENCY` | 0 |
+| `COMPARISON_INCOMPLETE` | `CONSISTENCY` | 0 |
 
 ## 12. 시간·난수·해시 포트
 

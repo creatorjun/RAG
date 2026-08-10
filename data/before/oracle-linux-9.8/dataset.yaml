@@ -1,0 +1,37 @@
+# data/before/oracle-linux-9.8/dataset.yaml
+schema_version: 1
+dataset_id: "oracle-linux-9.8-quick-test-v1"
+title: "Oracle Linux 9.8 사내 운영 기술 문서 샘플"
+language: "ko-KR"
+security_label: "internal"
+source_kind: "synthetic-official-based"
+captured_at: "2026-08-10T00:00:00Z"
+operating_system:
+  product: "Oracle Linux"
+  major_version: 9
+  update_snapshot: "9.8"
+  architectures:
+    - "x86_64"
+    - "aarch64"
+  default_x86_64_kernel: "kernel-uek-6.12.0-203.76.7.3"
+  alternative_x86_64_kernel: "kernel-5.14.0-687.5.3"
+documents:
+  - "README.md"
+  - "01-platform-baseline.md"
+  - "02-package-and-kernel-operations.md"
+  - "03-network-and-firewall.md"
+  - "04-storage-backup-and-kdump.md"
+  - "05-security-hardening.md"
+  - "06-service-operations-runbook.md"
+intended_tests:
+  - "markdown_parsing"
+  - "technical_classification"
+  - "exact_and_semantic_deduplication"
+  - "claim_extraction"
+  - "official_web_validation"
+  - "hierarchical_synthesis"
+  - "before_after_comparison"
+source_urls:
+  - "https://docs.oracle.com/en/operating-systems/oracle-linux/9/"
+  - "https://docs.oracle.com/en/operating-systems/oracle-linux/9/relnotes9.8/"
+  - "https://docs.oracle.com/en/operating-systems/oracle-linux/9/relnotes9.8/ol9.8-ShippedKernels.html"

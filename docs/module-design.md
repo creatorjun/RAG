@@ -217,13 +217,14 @@
 - 변경 중 파일은 `SOURCE_BUSY`로 재시도
 - 원본 스냅샷은 스트리밍 SHA-256과 동시에 CAS 임시 객체에 저장
 
-#### `ConfluenceDocumentSource`
+#### `BeforeFolderDocumentSource`
 
-- 페이지 ID를 `external_key`로 사용
-- 버전, space, title, 수정 시각, 작성자, 제한 정보를 스냅샷
-- 페이지 본문과 첨부 파일은 별도 논리 문서로 취급
-- API 페이지네이션 cursor를 체크포인트
-- 삭제된 페이지는 기존 리비전을 삭제하지 않고 문서 상태만 변경
+- 해석된 `data/before` 절대 경로만 source root로 허용
+- 파일 상대 경로를 `external_key`로 사용하고 콘텐츠 해시를 source version에 포함
+- 승인된 sidecar의 문서 ID, 버전, 수정 시각, 작성자, 보안 등급을 스냅샷
+- sidecar가 없으면 가장 제한적인 기본 ACL과 파일 메타데이터를 사용
+- 심볼릭 링크, junction, 특수 파일, 경로 탈출을 거부
+- 원본 시스템 API와 자격정보를 전혀 사용하지 않음
 
 ### 4.2 파서 어댑터
 
@@ -282,14 +283,30 @@
 - 활성 매니페스트가 참조하는 파일은 보존 정책에서 제외
 - 해시가 같은 객체는 중복 저장하지 않음
 
+#### `FolderRevisionWorkspace`
+
+- 고유 run ID로 `data/after/runs/<run_id>`만 신규 생성
+- before 트리를 `documents`에 복사하면서 전후 SHA-256 일치 검증
+- 기존 run 충돌 시 덮어쓰지 않고 `RUN_ALREADY_EXISTS`
+- finalization 전 현재 run의 `documents`만 쓰기 허용
+- finalization 후 새 run을 요구
+
+#### `FolderTreeComparator`
+
+- before와 current run documents를 상대 경로로 정렬 비교
+- added, modified, removed, unchanged 상태와 전후 해시 기록
+- UTF-8 텍스트는 unified diff를 만들고 binary는 해시와 크기만 기록
+- `_reports`를 비교 입력에서 제외하고 원자적으로 보고서 교체
+
 ### 4.5 보안 어댑터
 
 #### `MacOsKeychainStore`
 
-- 서비스명과 계정명으로 비밀 조회
+- 선택적 공개 웹 검색의 서비스명과 계정명으로 비밀 조회
 - 비밀 문자열을 로그 또는 예외 메시지에 포함하지 않음
 - 키 존재 여부와 실제 값 조회를 분리
-- 워커 프로세스에는 필요한 일회성 자격만 전달
+- 모델 워커와 문서 리비전 스킬에는 자격정보를 전달하지 않음
+- Confluence 자격정보 항목을 정의하거나 조회하지 않음
 
 ## 5. Presentation 계층
 
@@ -298,7 +315,12 @@
 | 명령 | 역할 | 기본 부작용 |
 | --- | --- | --- |
 | `rag source add` | 승인 소스 등록 | 설정 DB 변경 |
+| `rag source list` | 등록 소스와 활성 상태 조회 | 없음 |
+| `rag revision prepare` | 신규 before/after run 준비 | 새 run과 입력 매니페스트 생성 |
+| `rag revision compare` | 현재 run의 파일별 비교 | `_reports` 생성·갱신 |
+| `rag revision finalize` | 비교 검증 후 run 고정 | finalization 기록 |
 | `rag ingest` | 증분 실행 생성 | 작업 큐 생성 |
+| `rag validate` | 인제스천 실행의 검증 작업 생성 | 작업 큐 생성 |
 | `rag run status` | 실행과 단계 상태 조회 | 없음 |
 | `rag run cancel` | 실행 취소 요청 | 취소 플래그 설정 |
 | `rag review list` | 승인 대기 목록 | 없음 |
@@ -307,6 +329,8 @@
 | `rag publish` | 검증된 세대 게시 | 활성 산출물 변경 |
 | `rag benchmark` | 모델·메모리 벤치마크 | 벤치마크 파일 생성 |
 | `rag doctor` | 설치·저장소·모델 점검 | 기본 읽기 전용 |
+| `rag serve` | Coordinator와 선택 API 시작 | 장기 실행 프로세스 시작 |
+| `rag shutdown` | Coordinator 안전 종료 요청 | 실행 작업 취소와 리소스 종료 |
 
 ### 5.2 API 원칙
 
@@ -321,8 +345,8 @@
 부트스트랩 순서는 고정한다.
 
 1. 설정 파일 로드와 스키마 검증
-2. 비밀 참조 유효성 검사
-3. 경로 해석과 쓰기 권한 검사
+2. 웹 활성 시에만 외부 검색 비밀 참조 유효성 검사
+3. before 읽기 전용, after 신규 run 쓰기, 경로 비중첩 검사
 4. SQLite 스키마 버전 검사
 5. 저장소와 CAS 어댑터 생성
 6. disabled 또는 Tavily 검색 어댑터 선택
