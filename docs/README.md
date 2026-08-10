@@ -27,6 +27,7 @@
 | [operations.md](operations.md) | 운영자, SRE | Milestone 0, 6 | 설치, 벤치마크, 실행, 백업, 복구, 장애 대응, 업그레이드 |
 | [evaluation.md](evaluation.md) | QA, 도메인 전문가 | Milestone 0~6 | 골든 세트, 지표, 합격 기준, 성능·보안·회귀 평가 |
 | [implementation-roadmap.md](implementation-roadmap.md) | 기술 리드, 구현자 | 전체 | 작업 순서, 산출물, 의존성, 완료 조건, 병합 게이트 |
+| [implementation-status.md](implementation-status.md) | 기술 리드, 구현자 | 매 변경 | 실제 구현 범위, 검증 결과, 다음 작업 |
 | [ADR-0001](adr/0001-clean-architecture.md) | 전체 개발자 | 최초 | Clean/Hexagonal 의존성 규칙 |
 | [ADR-0002](adr/0002-local-model-runtime.md) | 모델·플랫폼 개발자 | Milestone 0 | Qwen MLX와 분리 워커 런타임 |
 | [ADR-0003](adr/0003-vector-store.md) | 검색 개발자 | Milestone 2 | SQLite·FAISS 저장 전략과 Qdrant 전환 기준 |

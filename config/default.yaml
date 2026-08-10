@@ -1,0 +1,43 @@
+# config/default.yaml
+schema_version: 1
+environment: development
+paths:
+  before_root: ./data/before
+  after_root: ./data/after
+  var_root: ./var
+  database: ./var/database/metadata.sqlite3
+  object_store: ./var/objects
+  vector_indexes: ./var/indexes/vectors
+  artifact_generations: ./var/artifacts/generations
+  staging: ./var/staging
+  quarantine: ./var/quarantine
+  logs: ./var/logs
+runtime:
+  python: "3.12"
+  max_parallel_llm_jobs: 1
+  parse_concurrency: 2
+  network_concurrency: 2
+sources:
+  max_file_bytes: 2147483648
+  reject_symlinks: true
+  allowed_roots:
+    - ./data/before
+document_workspace:
+  run_id_pattern: "^[a-z0-9][a-z0-9._-]{1,62}[a-z0-9]$"
+  reject_symlinks: true
+  reject_junctions: true
+  never_overwrite_run: true
+  require_input_manifest: true
+  require_comparison_report: true
+  finalize_immutable: true
+web:
+  enabled: false
+  provider: disabled
+  secret_ref: null
+  allowed_domains: []
+logging:
+  level: INFO
+  format: jsonl
+  include_source_text: false
+  include_model_output: false
+

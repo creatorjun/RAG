@@ -1,0 +1,4 @@
+# requirements.txt
+pydantic==2.13.4
+PyYAML==6.0.3
+

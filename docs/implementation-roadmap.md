@@ -1,6 +1,8 @@
 <!-- docs/implementation-roadmap.md -->
 # 구현 작업 분해와 마일스톤 로드맵
 
+현재 코드 기준 완료·진행·대기 상태와 실제 검증 결과는 [implementation-status.md](implementation-status.md)에서 관리한다. 이 문서는 목표 작업과 종료 gate의 기준을 유지한다.
+
 ## 1. 실행 원칙
 
 - 마일스톤은 순서대로 진행하고 종료 gate를 통과하기 전 다음 production 기능을 병합하지 않는다.

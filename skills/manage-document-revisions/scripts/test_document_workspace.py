@@ -8,6 +8,8 @@ from pathlib import Path
 from compare_run import compare
 from prepare_run import prepare, resolve_after
 
+from enterprise_rag.domain.errors import ApplicationError
+
 
 class DocumentWorkspaceTest(unittest.TestCase):
     def test_prepare_compare_and_finalize(self) -> None:
@@ -35,26 +37,31 @@ class DocumentWorkspaceTest(unittest.TestCase):
             )
             self.assertTrue((run_root / "_reports" / "comparison.json").is_file())
             self.assertTrue((run_root / "_reports" / "comparison.md").is_file())
-            self.assertIn("diffs/", (run_root / "_reports" / "comparison.md").read_text(encoding="utf-8"))
+            markdown_report = (run_root / "_reports" / "comparison.md").read_text(encoding="utf-8")
+            self.assertIn("diffs/", markdown_report)
 
-            with self.assertRaisesRegex(ValueError, "finalized run is immutable"):
+            with self.assertRaises(ApplicationError) as finalized_error:
                 compare(before.resolve(), after.resolve(), "20260810t090000z-test", False)
+            self.assertEqual(finalized_error.exception.code, "RUN_FINALIZED")
 
-            with self.assertRaises(FileExistsError):
+            with self.assertRaises(ApplicationError) as existing_error:
                 prepare(before.resolve(), after.resolve(), "20260810t090000z-test")
+            self.assertEqual(existing_error.exception.code, "RUN_ALREADY_EXISTS")
 
     def test_rejects_identical_roots(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             before = Path(temporary) / "before"
             before.mkdir()
-            with self.assertRaisesRegex(ValueError, "must differ"):
+            with self.assertRaises(ApplicationError) as overlap_error:
                 prepare(before.resolve(), before.resolve(), "20260810t090000z-test")
+            self.assertEqual(overlap_error.exception.code, "BEFORE_AFTER_OVERLAP")
 
     def test_missing_after_root_is_not_created(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             missing = Path(temporary) / "before" / "new-after"
-            with self.assertRaises(FileNotFoundError):
+            with self.assertRaises(ApplicationError) as missing_error:
                 resolve_after(str(missing))
+            self.assertEqual(missing_error.exception.code, "IO_FAILURE")
             self.assertFalse(missing.exists())
 
     def test_compare_rejects_changed_before_tree(self) -> None:
@@ -69,8 +76,9 @@ class DocumentWorkspaceTest(unittest.TestCase):
             prepare(before.resolve(), after.resolve(), "20260810t090000z-test")
             source.write_text("second\n", encoding="utf-8")
 
-            with self.assertRaisesRegex(ValueError, "differs from input manifest"):
+            with self.assertRaises(ApplicationError) as changed_error:
                 compare(before.resolve(), after.resolve(), "20260810t090000z-test", True)
+            self.assertEqual(changed_error.exception.code, "INPUT_HASH_CHANGED")
 
 
 if __name__ == "__main__":

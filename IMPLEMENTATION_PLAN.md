@@ -12,9 +12,12 @@
 RAG/
 ├── README.md
 ├── IMPLEMENTATION_PLAN.md
-├── pyproject.toml
-├── uv.lock
+├── .gitignore
 ├── .env.example
+├── pyproject.toml
+├── requirements.txt
+├── requirements-dev.txt
+├── uv.lock
 ├── config/
 │   ├── default.yaml
 │   ├── development.yaml
@@ -31,6 +34,7 @@ RAG/
 │   ├── security.md
 │   ├── evaluation.md
 │   ├── implementation-roadmap.md
+│   ├── implementation-status.md
 │   └── adr/
 │       ├── 0001-clean-architecture.md
 │       ├── 0002-local-model-runtime.md

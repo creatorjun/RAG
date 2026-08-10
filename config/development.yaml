@@ -1,0 +1,5 @@
+# config/development.yaml
+environment: development
+logging:
+  level: DEBUG
+

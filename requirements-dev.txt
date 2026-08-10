@@ -1,0 +1,10 @@
+# requirements-dev.txt
+-r requirements.txt
+hypothesis>=6.0,<7.0
+import-linter>=2.0,<3.0
+mypy>=1.0,<2.0
+pytest>=9.1,<10.0
+pytest-cov>=7.0,<8.0
+ruff>=0.16,<0.17
+types-PyYAML>=6.0,<7.0
+

@@ -1,0 +1,71 @@
+# pyproject.toml
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "enterprise-document-rag"
+version = "0.1.0"
+description = "Local-first enterprise document revision and RAG pipeline"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "LicenseRef-Proprietary"
+authors = [{ name = "Enterprise RAG Team" }]
+dependencies = [
+  "pydantic>=2.13.4,<3.0",
+  "PyYAML>=6.0.3,<7.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "hypothesis>=6.0,<7.0",
+  "import-linter>=2.0,<3.0",
+  "mypy>=1.0,<2.0",
+  "pytest>=9.1,<10.0",
+  "pytest-cov>=7.0,<8.0",
+  "ruff>=0.16,<0.17",
+  "types-PyYAML>=6.0,<7.0",
+]
+
+[project.scripts]
+rag = "enterprise_rag.presentation.cli:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "--strict-config --strict-markers -ra"
+testpaths = ["tests"]
+
+[tool.coverage.run]
+branch = true
+source = ["enterprise_rag"]
+omit = [
+  "*/__main__.py",
+  "*/application/ports/*",
+]
+
+[tool.coverage.report]
+fail_under = 85
+show_missing = true
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "A", "C4", "DTZ", "PTH", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101"]
+"skills/**/scripts/*.py" = ["E402"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+mypy_path = "src"
+packages = ["enterprise_rag"]
