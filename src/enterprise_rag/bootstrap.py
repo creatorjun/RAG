@@ -4,11 +4,24 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from enterprise_rag.application.dto.long_document import ChunkingConfigDto
 from enterprise_rag.application.use_cases.compare_revision_run import CompareRevisionRun
 from enterprise_rag.application.use_cases.finalize_revision_run import FinalizeRevisionRun
+from enterprise_rag.application.use_cases.plan_long_document import PlanLongDocument
 from enterprise_rag.application.use_cases.prepare_revision_run import PrepareRevisionRun
+from enterprise_rag.domain.context_budget import TokenBudget
+from enterprise_rag.infrastructure.chunking.structure_aware_text_chunker import (
+    StructureAwareTextChunker,
+)
 from enterprise_rag.infrastructure.clock.system import SystemClock, UuidIdGenerator
 from enterprise_rag.infrastructure.config.settings import LoadedSettings, SettingsLoader
+from enterprise_rag.infrastructure.planning.hierarchical_context_planner import (
+    HierarchicalContextPlanner,
+)
+from enterprise_rag.infrastructure.sources.before_text_source import BeforeTextDocumentSource
+from enterprise_rag.infrastructure.tokenization.conservative_utf8 import (
+    ConservativeUtf8TokenCounter,
+)
 from enterprise_rag.infrastructure.workspace.folder_revision_workspace import (
     FolderRevisionWorkspace,
 )
@@ -21,6 +34,7 @@ class Application:
     prepare_revision_run: PrepareRevisionRun
     compare_revision_run: CompareRevisionRun
     finalize_revision_run: FinalizeRevisionRun
+    plan_long_document: PlanLongDocument
 
     def close(self) -> None:
         return None
@@ -34,17 +48,54 @@ class Application:
 
 def build_application(project_root: Path, environment: str | None = None) -> Application:
     configuration = SettingsLoader(project_root).load(environment)
+    settings = configuration.settings
     workspace = FolderRevisionWorkspace(
         before_root=configuration.paths.before_root,
         after_root=configuration.paths.after_root,
         comparator=FolderTreeComparator(),
         clock=SystemClock(),
         id_generator=UuidIdGenerator(),
-        max_file_bytes=configuration.settings.sources.max_file_bytes,
+        max_file_bytes=settings.sources.max_file_bytes,
+    )
+    token_counter = ConservativeUtf8TokenCounter()
+    chunking_config = ChunkingConfigDto(
+        tokenizer_id=settings.chunking.tokenizer_id,
+        chunker_version=settings.chunking.version,
+        target_tokens=settings.chunking.target_tokens,
+        max_tokens=settings.chunking.max_tokens,
+        minimum_tokens=settings.chunking.minimum_tokens,
+        overlap_ratio=settings.chunking.overlap_ratio,
+    )
+    map_budget = TokenBudget(
+        settings.models.llm.context_tokens,
+        settings.synthesis.map_prompt_overhead_tokens,
+        settings.synthesis.map_max_output_tokens,
+        settings.models.llm.reserved_tokens,
+        settings.synthesis.input_budget_ratio,
+    )
+    reduce_budget = TokenBudget(
+        settings.models.llm.context_tokens,
+        settings.synthesis.reduce_prompt_overhead_tokens,
+        settings.synthesis.reduce_max_output_tokens,
+        settings.models.llm.reserved_tokens,
+        settings.synthesis.input_budget_ratio,
+    )
+    plan_long_document = PlanLongDocument(
+        source=BeforeTextDocumentSource(
+            configuration.paths.before_root,
+            settings.sources.text_max_file_bytes,
+        ),
+        chunker=StructureAwareTextChunker(token_counter),
+        planner=HierarchicalContextPlanner(),
+        chunking_config=chunking_config,
+        map_budget=map_budget,
+        reduce_budget=reduce_budget,
+        separator_tokens=settings.synthesis.batch_separator_tokens,
     )
     return Application(
         configuration=configuration,
         prepare_revision_run=PrepareRevisionRun(workspace),
         compare_revision_run=CompareRevisionRun(workspace),
         finalize_revision_run=FinalizeRevisionRun(workspace),
+        plan_long_document=plan_long_document,
     )

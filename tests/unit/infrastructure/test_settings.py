@@ -32,8 +32,31 @@ def _valid_settings() -> dict[str, object]:
         },
         "sources": {
             "max_file_bytes": 1024,
+            "text_max_file_bytes": 1024,
             "reject_symlinks": True,
             "allowed_roots": ["data/before"],
+        },
+        "chunking": {
+            "tokenizer_id": "conservative-utf8-bytes-v1",
+            "version": "1",
+            "target_tokens": 800,
+            "max_tokens": 1200,
+            "minimum_tokens": 80,
+            "overlap_ratio": 0.12,
+        },
+        "models": {
+            "llm": {
+                "context_tokens": 16384,
+                "reserved_tokens": 512,
+            }
+        },
+        "synthesis": {
+            "input_budget_ratio": 0.8,
+            "map_prompt_overhead_tokens": 1024,
+            "map_max_output_tokens": 3072,
+            "reduce_prompt_overhead_tokens": 1024,
+            "reduce_max_output_tokens": 4096,
+            "batch_separator_tokens": 8,
         },
         "document_workspace": {
             "run_id_pattern": "^[a-z0-9][a-z0-9._-]{1,62}[a-z0-9]$",

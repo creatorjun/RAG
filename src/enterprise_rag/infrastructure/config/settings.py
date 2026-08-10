@@ -9,6 +9,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from enterprise_rag.domain.context_budget import TokenBudget
 from enterprise_rag.domain.errors import revision_error
 
 
@@ -38,8 +39,42 @@ class RuntimeSettings(_StrictModel):
 
 class SourcesSettings(_StrictModel):
     max_file_bytes: int = Field(default=2 * 1024 * 1024 * 1024, ge=1)
+    text_max_file_bytes: int = Field(default=128 * 1024 * 1024, ge=1)
     reject_symlinks: bool = True
     allowed_roots: tuple[Path, ...]
+
+
+class ChunkingSettings(_StrictModel):
+    tokenizer_id: Literal["conservative-utf8-bytes-v1"]
+    version: str = Field(min_length=1)
+    target_tokens: int = Field(ge=128)
+    max_tokens: int = Field(ge=256)
+    minimum_tokens: int = Field(ge=1)
+    overlap_ratio: float = Field(ge=0, le=0.25)
+
+    @model_validator(mode="after")
+    def validate_token_limits(self) -> ChunkingSettings:
+        if not self.minimum_tokens <= self.target_tokens <= self.max_tokens:
+            raise ValueError("chunk token limits are inconsistent")
+        return self
+
+
+class LlmSettings(_StrictModel):
+    context_tokens: Literal[4096, 16384, 24576, 32768]
+    reserved_tokens: int = Field(ge=128)
+
+
+class ModelsSettings(_StrictModel):
+    llm: LlmSettings
+
+
+class SynthesisSettings(_StrictModel):
+    input_budget_ratio: float = Field(gt=0, le=0.8)
+    map_prompt_overhead_tokens: int = Field(ge=128)
+    map_max_output_tokens: int = Field(ge=256)
+    reduce_prompt_overhead_tokens: int = Field(ge=128)
+    reduce_max_output_tokens: int = Field(ge=256)
+    batch_separator_tokens: int = Field(ge=0)
 
 
 class DocumentWorkspaceSettings(_StrictModel):
@@ -100,9 +135,39 @@ class Settings(_StrictModel):
     paths: PathsSettings
     runtime: RuntimeSettings
     sources: SourcesSettings
+    chunking: ChunkingSettings
+    models: ModelsSettings
+    synthesis: SynthesisSettings
     document_workspace: DocumentWorkspaceSettings
     web: WebSettings
     logging: LoggingSettings
+
+    @model_validator(mode="after")
+    def validate_long_document_budgets(self) -> Settings:
+        if self.sources.text_max_file_bytes > self.sources.max_file_bytes:
+            raise ValueError("text source limit exceeds global source limit")
+        map_budget = TokenBudget(
+            self.models.llm.context_tokens,
+            self.synthesis.map_prompt_overhead_tokens,
+            self.synthesis.map_max_output_tokens,
+            self.models.llm.reserved_tokens,
+            self.synthesis.input_budget_ratio,
+        )
+        reduce_budget = TokenBudget(
+            self.models.llm.context_tokens,
+            self.synthesis.reduce_prompt_overhead_tokens,
+            self.synthesis.reduce_max_output_tokens,
+            self.models.llm.reserved_tokens,
+            self.synthesis.input_budget_ratio,
+        )
+        if self.chunking.max_tokens > map_budget.content_capacity_tokens:
+            raise ValueError("chunk maximum exceeds map content capacity")
+        minimum_reduce_capacity = (
+            2 * self.synthesis.reduce_max_output_tokens + self.synthesis.batch_separator_tokens
+        )
+        if reduce_budget.content_capacity_tokens < minimum_reduce_capacity:
+            raise ValueError("reduce budget cannot make hierarchical progress")
+        return self
 
 
 @dataclass(frozen=True, slots=True)

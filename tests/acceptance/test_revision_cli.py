@@ -108,6 +108,29 @@ class RevisionCliTest(unittest.TestCase):
         self.assertEqual(second_exit, 2)
         self.assertEqual(duplicate["code"], "RUN_ALREADY_EXISTS")
 
+    def test_long_document_plan_exceeds_context_without_loss_or_duplicate(self) -> None:
+        paragraph = "## Oracle Linux 운영 기준\n긴 문서의 모든 문장을 정확히 처리합니다.🙂\n\n"
+        (self.before_root / "long.md").write_text(paragraph * 3000, encoding="utf-8")
+        exit_code, payload, error = self._execute(
+            "document",
+            "plan",
+            "--relative-path",
+            "long.md",
+        )
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(error, "")
+        self.assertTrue(payload["plan_complete"])
+        self.assertGreater(payload["chunk_count"], 1)
+        self.assertGreater(payload["map_batch_count"], 1)
+        self.assertGreater(len(payload["reduce_round_batch_counts"]), 0)
+        self.assertEqual(payload["coverage"]["missing_primary_characters"], 0)
+        self.assertEqual(payload["coverage"]["duplicate_primary_characters"], 0)
+        self.assertTrue(payload["coverage"]["complete"])
+        self.assertLessEqual(
+            payload["max_planned_context_tokens"],
+            payload["maximum_context_tokens"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

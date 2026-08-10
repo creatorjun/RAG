@@ -65,6 +65,28 @@ _REVISION_ERROR_SPECS: dict[str, tuple[ErrorCategory, str]] = {
     "CONFIG_INVALID": (ErrorCategory.INVALID_INPUT, "프로젝트 설정이 올바르지 않습니다."),
     "DEPENDENCY_MISSING": (ErrorCategory.INTERNAL, "필수 Python 의존성이 설치되지 않았습니다."),
     "IO_FAILURE": (ErrorCategory.INTERNAL, "문서 작업 중 파일 시스템 오류가 발생했습니다."),
+    "SOURCE_BUSY": (ErrorCategory.TRANSIENT_SOURCE, "문서를 읽는 동안 원본이 변경되었습니다."),
+    "DOCUMENT_TOO_LARGE": (ErrorCategory.INVALID_INPUT, "문서가 현재 텍스트 처리 상한을 넘습니다."),
+    "TEXT_FORMAT_UNSUPPORTED": (
+        ErrorCategory.UNSUPPORTED_FORMAT,
+        "현재 장문 계획에서 지원하지 않는 텍스트 형식입니다.",
+    ),
+    "CHUNK_BOUNDARY": (
+        ErrorCategory.INVALID_INPUT,
+        "컨텍스트 제한 안에서 청크 경계를 만들 수 없습니다.",
+    ),
+    "CHUNK_COVERAGE_FAILED": (
+        ErrorCategory.CONSISTENCY,
+        "청크가 문서 전체를 정확히 한 번 포함하지 못했습니다.",
+    ),
+    "TOKEN_BUDGET_EXCEEDED": (
+        ErrorCategory.INVALID_INPUT,
+        "모델 요청이 승인된 컨텍스트 예산을 초과합니다.",
+    ),
+    "DUPLICATE_PLAN_ITEM": (
+        ErrorCategory.CONSISTENCY,
+        "컨텍스트 계획에 같은 항목이 중복 포함되었습니다.",
+    ),
 }
 
 

@@ -9,6 +9,7 @@ from collections.abc import Sequence
 from dataclasses import asdict
 from pathlib import Path
 
+from enterprise_rag.application.dto.long_document import LongDocumentPlanDto
 from enterprise_rag.application.dto.revision import FolderComparisonDto, RevisionRunDto
 from enterprise_rag.bootstrap import Application, build_application
 from enterprise_rag.domain.errors import ApplicationError
@@ -25,6 +26,10 @@ def _build_parser() -> argparse.ArgumentParser:
     for name in ("prepare", "compare", "finalize"):
         command = revision_commands.add_parser(name)
         command.add_argument("--run-id", required=True)
+    document = commands.add_parser("document")
+    document_commands = document.add_subparsers(dest="document_command", required=True)
+    plan = document_commands.add_parser("plan")
+    plan.add_argument("--relative-path", required=True)
     return parser
 
 
@@ -51,6 +56,39 @@ def _serialize_comparison(value: FolderComparisonDto) -> dict[str, object]:
     }
 
 
+def _serialize_long_document_plan(value: LongDocumentPlanDto) -> dict[str, object]:
+    chunk_set = value.chunks
+    plan = value.context_plan
+    all_batches = list(plan.map_batches)
+    for reduce_round in plan.reduce_rounds:
+        all_batches.extend(reduce_round)
+    return {
+        "revision_id": chunk_set.revision_id,
+        "relative_path": chunk_set.relative_path,
+        "source_sha256": chunk_set.source_sha256,
+        "normalized_sha256": chunk_set.normalized_sha256,
+        "normalized_character_count": chunk_set.coverage.normalized_character_count,
+        "chunk_count": len(chunk_set.chunks),
+        "max_chunk_model_tokens": max(
+            (chunk.model_token_count for chunk in chunk_set.chunks),
+            default=0,
+        ),
+        "coverage": asdict(chunk_set.coverage),
+        "map_batch_count": len(plan.map_batches),
+        "reduce_round_batch_counts": [len(round_batches) for round_batches in plan.reduce_rounds],
+        "max_planned_context_tokens": max(
+            (batch.total_planned_tokens for batch in all_batches),
+            default=0,
+        ),
+        "maximum_context_tokens": max(
+            (batch.maximum_context_tokens for batch in all_batches),
+            default=0,
+        ),
+        "root_result_id": plan.root_result_id,
+        "plan_complete": plan.complete,
+    }
+
+
 async def _execute(application: Application, args: argparse.Namespace) -> dict[str, object]:
     if args.command == "doctor":
         settings = application.configuration.settings
@@ -59,9 +97,15 @@ async def _execute(application: Application, args: argparse.Namespace) -> dict[s
             "schema_version": settings.schema_version,
             "environment": settings.environment,
             "web_enabled": settings.web.enabled,
+            "operating_context_tokens": settings.models.llm.context_tokens,
+            "chunk_max_tokens": settings.chunking.max_tokens,
+            "token_counter": settings.chunking.tokenizer_id,
             "before_root_readable": application.configuration.paths.before_root.is_dir(),
             "after_root_available": application.configuration.paths.after_root.is_dir(),
         }
+    if args.command == "document":
+        result = await application.plan_long_document.execute(args.relative_path)
+        return _serialize_long_document_plan(result)
     if args.revision_command == "prepare":
         return _serialize_run(await application.prepare_revision_run.execute(args.run_id))
     if args.revision_command == "compare":
