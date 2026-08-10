@@ -40,6 +40,7 @@ synthesis:
   map_max_output_tokens: 3072
   reduce_prompt_overhead_tokens: 1024
   reduce_max_output_tokens: 4096
+  batch_item_overhead_tokens: 128
   batch_separator_tokens: 8
 document_workspace:
   run_id_pattern: "^[a-z0-9][a-z0-9._-]{1,62}[a-z0-9]$"

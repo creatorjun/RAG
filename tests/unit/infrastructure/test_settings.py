@@ -56,6 +56,7 @@ def _valid_settings() -> dict[str, object]:
             "map_max_output_tokens": 3072,
             "reduce_prompt_overhead_tokens": 1024,
             "reduce_max_output_tokens": 4096,
+            "batch_item_overhead_tokens": 128,
             "batch_separator_tokens": 8,
         },
         "document_workspace": {
@@ -107,6 +108,22 @@ class SettingsTest(unittest.TestCase):
         logging = dict(value["logging"])
         logging["include_source_text"] = True
         value["logging"] = logging
+        with self.assertRaises(ValidationError):
+            Settings.model_validate(value)
+
+    def test_rejects_context_budget_that_cannot_reduce(self) -> None:
+        value = _valid_settings()
+        models = dict(value["models"])
+        models["llm"] = {"context_tokens": 4096, "reserved_tokens": 512}
+        value["models"] = models
+        with self.assertRaises(ValidationError):
+            Settings.model_validate(value)
+
+    def test_rejects_text_limit_above_global_source_limit(self) -> None:
+        value = _valid_settings()
+        sources = dict(value["sources"])
+        sources["text_max_file_bytes"] = 2048
+        value["sources"] = sources
         with self.assertRaises(ValidationError):
             Settings.model_validate(value)
 

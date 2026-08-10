@@ -23,6 +23,7 @@ class PlanLongDocument:
         chunking_config: ChunkingConfigDto,
         map_budget: TokenBudget,
         reduce_budget: TokenBudget,
+        item_overhead_tokens: int,
         separator_tokens: int,
     ) -> None:
         self._source = source
@@ -31,6 +32,7 @@ class PlanLongDocument:
         self._chunking_config = chunking_config
         self._map_budget = map_budget
         self._reduce_budget = reduce_budget
+        self._item_overhead_tokens = item_overhead_tokens
         self._separator_tokens = separator_tokens
 
     async def execute(self, relative_path: str) -> LongDocumentPlanDto:
@@ -42,6 +44,7 @@ class PlanLongDocument:
             chunks.chunks,
             self._map_budget,
             self._reduce_budget,
+            self._item_overhead_tokens,
             self._separator_tokens,
         )
         if context_plan.source_item_count != len(chunks.chunks) or not context_plan.complete:

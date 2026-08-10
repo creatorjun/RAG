@@ -25,12 +25,20 @@ class HierarchicalContextPlanner:
         chunks: tuple[LongTextChunkDto, ...],
         map_budget: TokenBudget,
         reduce_budget: TokenBudget,
+        item_overhead_tokens: int,
         separator_tokens: int,
     ) -> HierarchicalContextPlanDto:
-        if separator_tokens < 0:
-            raise ValueError("separator tokens must be non-negative")
+        if item_overhead_tokens < 0 or separator_tokens < 0:
+            raise ValueError("batch overhead tokens must be non-negative")
         map_items = tuple(_PlanItem(chunk.chunk_id, chunk.model_token_count) for chunk in chunks)
-        map_batches = self._pack(map_items, map_budget, separator_tokens, "map", 0)
+        map_batches = self._pack(
+            map_items,
+            map_budget,
+            item_overhead_tokens,
+            separator_tokens,
+            "map",
+            0,
+        )
         self._validate_level(map_items, map_batches)
         if not map_batches:
             return HierarchicalContextPlanDto((), (), 0, None, True)
@@ -43,6 +51,7 @@ class HierarchicalContextPlanner:
             batches = self._pack(
                 previous,
                 reduce_budget,
+                item_overhead_tokens,
                 separator_tokens,
                 "reduce",
                 round_ordinal,
@@ -67,6 +76,7 @@ class HierarchicalContextPlanner:
         self,
         items: tuple[_PlanItem, ...],
         budget: TokenBudget,
+        item_overhead_tokens: int,
         separator_tokens: int,
         purpose: str,
         round_ordinal: int,
@@ -78,8 +88,9 @@ class HierarchicalContextPlanner:
         current: list[_PlanItem] = []
         current_tokens = 0
         for item in items:
-            budget.ensure_fits(item.token_count)
-            incremental = item.token_count + (separator_tokens if current else 0)
+            item_tokens = item.token_count + item_overhead_tokens
+            budget.ensure_fits(item_tokens)
+            incremental = item_tokens + (separator_tokens if current else 0)
             if current and current_tokens + incremental > budget.content_capacity_tokens:
                 batches.append(
                     self._batch(
@@ -93,7 +104,7 @@ class HierarchicalContextPlanner:
                 )
                 current = []
                 current_tokens = 0
-                incremental = item.token_count
+                incremental = item_tokens
             current.append(item)
             current_tokens += incremental
         if current:

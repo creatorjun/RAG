@@ -74,6 +74,7 @@ class SynthesisSettings(_StrictModel):
     map_max_output_tokens: int = Field(ge=256)
     reduce_prompt_overhead_tokens: int = Field(ge=128)
     reduce_max_output_tokens: int = Field(ge=256)
+    batch_item_overhead_tokens: int = Field(ge=64)
     batch_separator_tokens: int = Field(ge=0)
 
 
@@ -163,7 +164,9 @@ class Settings(_StrictModel):
         if self.chunking.max_tokens > map_budget.content_capacity_tokens:
             raise ValueError("chunk maximum exceeds map content capacity")
         minimum_reduce_capacity = (
-            2 * self.synthesis.reduce_max_output_tokens + self.synthesis.batch_separator_tokens
+            2
+            * (self.synthesis.reduce_max_output_tokens + self.synthesis.batch_item_overhead_tokens)
+            + self.synthesis.batch_separator_tokens
         )
         if reduce_budget.content_capacity_tokens < minimum_reduce_capacity:
             raise ValueError("reduce budget cannot make hierarchical progress")

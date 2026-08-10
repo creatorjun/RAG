@@ -37,7 +37,7 @@ class HierarchicalContextPlannerTest(unittest.TestCase):
 
     def test_plans_every_item_once_across_multiple_reduce_rounds(self) -> None:
         chunks = tuple(_chunk(index) for index in range(100))
-        plan = self.planner.plan(chunks, self.map_budget, self.reduce_budget, 8)
+        plan = self.planner.plan(chunks, self.map_budget, self.reduce_budget, 128, 8)
         map_item_ids = [item_id for batch in plan.map_batches for item_id in batch.item_ids]
         self.assertEqual(map_item_ids, [chunk.chunk_id for chunk in chunks])
         self.assertEqual(len(map_item_ids), len(set(map_item_ids)))
@@ -61,11 +61,11 @@ class HierarchicalContextPlannerTest(unittest.TestCase):
     def test_rejects_duplicate_and_oversized_items(self) -> None:
         duplicate = (_chunk(1), _chunk(1))
         with self.assertRaises(ApplicationError) as duplicate_error:
-            self.planner.plan(duplicate, self.map_budget, self.reduce_budget, 8)
+            self.planner.plan(duplicate, self.map_budget, self.reduce_budget, 128, 8)
         self.assertEqual(duplicate_error.exception.code, "DUPLICATE_PLAN_ITEM")
         oversized = (_chunk(1, self.map_budget.content_capacity_tokens + 1),)
         with self.assertRaises(ApplicationError) as budget_error:
-            self.planner.plan(oversized, self.map_budget, self.reduce_budget, 8)
+            self.planner.plan(oversized, self.map_budget, self.reduce_budget, 128, 8)
         self.assertEqual(budget_error.exception.code, "TOKEN_BUDGET_EXCEEDED")
 
 

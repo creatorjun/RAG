@@ -90,6 +90,7 @@ def build_application(project_root: Path, environment: str | None = None) -> App
         chunking_config=chunking_config,
         map_budget=map_budget,
         reduce_budget=reduce_budget,
+        item_overhead_tokens=settings.synthesis.batch_item_overhead_tokens,
         separator_tokens=settings.synthesis.batch_separator_tokens,
     )
     return Application(
