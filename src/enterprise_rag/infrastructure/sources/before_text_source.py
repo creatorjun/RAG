@@ -41,6 +41,23 @@ class BeforeTextDocumentSource:
         except OSError as error:
             raise revision_error("IO_FAILURE", {"relative_path": relative_path}) from error
 
+    async def list_relative_paths(self) -> tuple[str, ...]:
+        try:
+            return await asyncio.to_thread(self._list_relative_paths)
+        except ApplicationError:
+            raise
+        except OSError as error:
+            raise revision_error("IO_FAILURE") from error
+
+    def _list_relative_paths(self) -> tuple[str, ...]:
+        paths: list[str] = []
+        for candidate in sorted(self._before_root.rglob("*"), key=lambda item: item.as_posix()):
+            if is_link_or_reparse(candidate):
+                raise revision_error("LINK_NOT_ALLOWED")
+            if candidate.is_file() and candidate.suffix.lower() in _TEXT_EXTENSIONS:
+                paths.append(candidate.relative_to(self._before_root).as_posix())
+        return tuple(paths)
+
     def _read(self, relative_path: str) -> TextDocumentDto:
         relative = self._validate_relative_path(relative_path)
         candidate = self._before_root.joinpath(*relative.parts)

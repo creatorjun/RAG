@@ -42,3 +42,32 @@ class FolderComparisonDto:
         for file in self.files:
             result[file.status.value] += 1
         return result
+
+
+@dataclass(frozen=True, slots=True)
+class SourceDocumentRecordDto:
+    relative_path: str
+    source_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class GeneratedDocumentWriteDto:
+    relative_path: str
+    content: str
+    model_id: str
+    model_revision: str
+    sources: tuple[SourceDocumentRecordDto, ...]
+    source_chunk_count: int
+    generation_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class DocumentIntegrationDto:
+    run: RevisionRunDto
+    output_relative_path: str
+    model_id: str
+    model_revision: str
+    source_document_count: int
+    source_chunk_count: int
+    generation_count: int
+    comparison: FolderComparisonDto

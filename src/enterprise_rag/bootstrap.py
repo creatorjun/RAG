@@ -7,6 +7,7 @@ from pathlib import Path
 from enterprise_rag.application.dto.long_document import ChunkingConfigDto
 from enterprise_rag.application.use_cases.compare_revision_run import CompareRevisionRun
 from enterprise_rag.application.use_cases.finalize_revision_run import FinalizeRevisionRun
+from enterprise_rag.application.use_cases.integrate_documents import IntegrateDocuments
 from enterprise_rag.application.use_cases.plan_long_document import PlanLongDocument
 from enterprise_rag.application.use_cases.prepare_revision_run import PrepareRevisionRun
 from enterprise_rag.domain.context_budget import TokenBudget
@@ -15,6 +16,7 @@ from enterprise_rag.infrastructure.chunking.structure_aware_text_chunker import 
 )
 from enterprise_rag.infrastructure.clock.system import SystemClock, UuidIdGenerator
 from enterprise_rag.infrastructure.config.settings import LoadedSettings, SettingsLoader
+from enterprise_rag.infrastructure.models.mlx_text_generator import MlxTextGenerator
 from enterprise_rag.infrastructure.planning.hierarchical_context_planner import (
     HierarchicalContextPlanner,
 )
@@ -35,6 +37,7 @@ class Application:
     compare_revision_run: CompareRevisionRun
     finalize_revision_run: FinalizeRevisionRun
     plan_long_document: PlanLongDocument
+    integrate_documents: IntegrateDocuments
 
     def close(self) -> None:
         return None
@@ -49,15 +52,23 @@ class Application:
 def build_application(project_root: Path, environment: str | None = None) -> Application:
     configuration = SettingsLoader(project_root).load(environment)
     settings = configuration.settings
+    clock = SystemClock()
+    id_generator = UuidIdGenerator()
     workspace = FolderRevisionWorkspace(
         before_root=configuration.paths.before_root,
         after_root=configuration.paths.after_root,
         comparator=FolderTreeComparator(),
-        clock=SystemClock(),
-        id_generator=UuidIdGenerator(),
+        clock=clock,
+        id_generator=id_generator,
         max_file_bytes=settings.sources.max_file_bytes,
     )
     token_counter = ConservativeUtf8TokenCounter()
+    source = BeforeTextDocumentSource(
+        configuration.paths.before_root,
+        settings.sources.text_max_file_bytes,
+    )
+    chunker = StructureAwareTextChunker(token_counter)
+    planner = HierarchicalContextPlanner()
     chunking_config = ChunkingConfigDto(
         tokenizer_id=settings.chunking.tokenizer_id,
         chunker_version=settings.chunking.version,
@@ -81,12 +92,28 @@ def build_application(project_root: Path, environment: str | None = None) -> App
         settings.synthesis.input_budget_ratio,
     )
     plan_long_document = PlanLongDocument(
-        source=BeforeTextDocumentSource(
-            configuration.paths.before_root,
-            settings.sources.text_max_file_bytes,
+        source=source,
+        chunker=chunker,
+        planner=planner,
+        chunking_config=chunking_config,
+        map_budget=map_budget,
+        reduce_budget=reduce_budget,
+        item_overhead_tokens=settings.synthesis.batch_item_overhead_tokens,
+        separator_tokens=settings.synthesis.batch_separator_tokens,
+    )
+    integrate_documents = IntegrateDocuments(
+        source=source,
+        workspace=workspace,
+        chunker=chunker,
+        planner=planner,
+        generator=MlxTextGenerator(
+            model_id=settings.models.llm.model_id,
+            model_revision=settings.models.llm.revision,
+            maximum_context_tokens=settings.models.llm.context_tokens,
+            reserved_tokens=settings.models.llm.reserved_tokens,
         ),
-        chunker=StructureAwareTextChunker(token_counter),
-        planner=HierarchicalContextPlanner(),
+        clock=clock,
+        id_generator=id_generator,
         chunking_config=chunking_config,
         map_budget=map_budget,
         reduce_budget=reduce_budget,
@@ -99,4 +126,5 @@ def build_application(project_root: Path, environment: str | None = None) -> App
         compare_revision_run=CompareRevisionRun(workspace),
         finalize_revision_run=FinalizeRevisionRun(workspace),
         plan_long_document=plan_long_document,
+        integrate_documents=integrate_documents,
     )

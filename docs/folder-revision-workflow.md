@@ -214,6 +214,17 @@ python skills/manage-document-revisions/scripts/prepare_run.py --before-root dat
 python skills/manage-document-revisions/scripts/compare_run.py --before-root data/before --after-root data/after --run-id 20260810t090000z-oracle-linux-refresh --finalize
 ```
 
+### 전체 문서 자동 통합
+
+```bash
+rag document integrate
+```
+
+이 명령은 자동 run ID를 생성하고 `data/before`의 지원되는 모든 UTF-8 텍스트를 계층형으로
+통합해 현재 run의 `documents/integrated-technical-guide.md`에 추가한 뒤 compare를 실행한다.
+자동 finalize는 하지 않는다. 출력 JSON의 `run_id`와 비교 건수를 확인하고 사람이 결과를
+검토한 후 `rag revision finalize --run-id <run_id>`를 실행한다.
+
 ## 13. 오류와 운영 조치
 
 | 오류 | 의미 | 조치 |

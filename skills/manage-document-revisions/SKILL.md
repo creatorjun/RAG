@@ -50,6 +50,18 @@ The command creates `data/after/runs/<run_id>/documents`, copies the immutable i
 - Do not write generated content into `data/before`, a previous run, repository documentation, or configuration unless the user separately requests those project changes.
 - If a requested change needs a secret, external source access, or a path outside the allowed roots, stop and report the boundary instead of expanding access.
 
+For an automated integrated technical guide over every supported UTF-8 text document, run:
+
+```bash
+rag document integrate
+```
+
+This single command prepares a new run, performs local hierarchical synthesis, writes
+`integrated-technical-guide.md` only in the current run, and creates a comparison report. It does
+not finalize the run; review the document and report before finalization. The first invocation may
+download only the configured pinned model revision. No source document content may be transmitted
+during model download or inference.
+
 ### 4. Compare and Finalize
 
 Run:

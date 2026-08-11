@@ -8,7 +8,14 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
 
+from enterprise_rag.application.dto.revision import (
+    DocumentIntegrationDto,
+    FolderComparisonDto,
+    RevisionRunDto,
+)
+from enterprise_rag.domain.revision import RevisionRunState
 from enterprise_rag.presentation.cli import main
 
 
@@ -129,6 +136,54 @@ class RevisionCliTest(unittest.TestCase):
         self.assertLessEqual(
             payload["max_planned_context_tokens"],
             payload["maximum_context_tokens"],
+        )
+
+    def test_document_integrate_dispatches_single_pipeline_command(self) -> None:
+        run_id = "20260811t120000z-integrated"
+        run = RevisionRunDto(
+            run_id,
+            RevisionRunState.PREPARED,
+            "a" * 64,
+            2,
+            f"runs/{run_id}/documents",
+            "2026-08-11T12:00:00Z",
+            None,
+        )
+        comparison = FolderComparisonDto(
+            run_id,
+            "cmp-1",
+            "2026-08-11T12:01:00Z",
+            (),
+            "b" * 64,
+        )
+        result = DocumentIntegrationDto(
+            run,
+            "integrated-technical-guide.md",
+            "test/model",
+            "c" * 40,
+            2,
+            3,
+            2,
+            comparison,
+        )
+        application = MagicMock()
+        application.__enter__.return_value = application
+        application.integrate_documents.execute = AsyncMock(return_value=result)
+        with patch(
+            "enterprise_rag.presentation.cli.build_application",
+            return_value=application,
+        ):
+            exit_code, payload, error = self._execute("document", "integrate")
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(error, "")
+        self.assertEqual(payload["run_id"], run_id)
+        self.assertEqual(
+            payload["output_relative_path"],
+            f"runs/{run_id}/documents/integrated-technical-guide.md",
+        )
+        application.integrate_documents.execute.assert_awaited_once_with(
+            None,
+            "integrated-technical-guide.md",
         )
 
 

@@ -5,15 +5,23 @@ import asyncio
 import json
 import shutil
 from collections.abc import Callable
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, TypeVar
 
-from enterprise_rag.application.dto.revision import FolderComparisonDto, RevisionRunDto
+from enterprise_rag.application.dto.revision import (
+    FolderComparisonDto,
+    GeneratedDocumentWriteDto,
+    RevisionRunDto,
+)
 from enterprise_rag.application.ports.clock import ClockPort, IdGeneratorPort
 from enterprise_rag.application.ports.document_workspace import DocumentComparatorPort
 from enterprise_rag.domain.errors import ApplicationError, revision_error
 from enterprise_rag.domain.revision import RevisionRunState
-from enterprise_rag.infrastructure.workspace.file_io import atomic_write_json, sha256_file
+from enterprise_rag.infrastructure.workspace.file_io import (
+    atomic_write_json,
+    atomic_write_text,
+    sha256_file,
+)
 from enterprise_rag.infrastructure.workspace.path_security import (
     is_link_or_reparse,
     is_within,
@@ -51,6 +59,18 @@ class FolderRevisionWorkspace:
 
     async def finalize_run(self, run_id: str) -> RevisionRunDto:
         return await self._run_io(self._finalize_run, run_id)
+
+    async def write_generated_document(
+        self,
+        run_id: str,
+        request: GeneratedDocumentWriteDto,
+    ) -> str:
+        try:
+            return await asyncio.to_thread(self._write_generated_document, run_id, request)
+        except ApplicationError:
+            raise
+        except (OSError, json.JSONDecodeError, TypeError, ValueError) as error:
+            raise revision_error("IO_FAILURE", {"run_id": run_id}) from error
 
     async def _run_io(self, operation: Callable[[str], _Result], run_id: str) -> _Result:
         try:
@@ -144,12 +164,66 @@ class FolderRevisionWorkspace:
         if not comparison_path.is_file() or sha256_file(comparison_path) != report.report_sha256:
             raise revision_error("COMPARISON_INCOMPLETE", {"run_id": run_id})
         self._verify_input_manifest(reports_root / "input-manifest.json")
+        self._verify_synthesis_manifest(run_root, run_id)
         manifest["state"] = RevisionRunState.FINALIZED.value
         manifest["finalized_at"] = self._utc_now()
         manifest["comparison_counts"] = report.counts
         manifest["comparison_sha256"] = report.report_sha256
         atomic_write_json(run_root / "run-manifest.json", manifest)
         return self._to_run_dto(run_root, manifest)
+
+    def _write_generated_document(
+        self,
+        run_id: str,
+        request: GeneratedDocumentWriteDto,
+    ) -> str:
+        run_root, _ = self._open_prepared_run(run_id)
+        documents_root = (run_root / "documents").resolve(strict=True)
+        relative = self._validate_output_relative_path(request.relative_path)
+        target = documents_root.joinpath(*relative.parts)
+        current = documents_root
+        for part in relative.parts[:-1]:
+            current = current / part
+            if current.exists() and is_link_or_reparse(current):
+                raise revision_error("LINK_NOT_ALLOWED", {"relative_path": relative.as_posix()})
+        if target.exists() or is_link_or_reparse(target):
+            raise revision_error(
+                "OUTPUT_ALREADY_EXISTS",
+                {"relative_path": relative.as_posix()},
+            )
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if not is_within(target.parent.resolve(strict=True), documents_root):
+            raise revision_error("PATH_ESCAPE", {"relative_path": relative.as_posix()})
+        atomic_write_text(target, request.content)
+        report_path = run_root / "_reports" / "synthesis.json"
+        if report_path.exists() or is_link_or_reparse(report_path):
+            raise revision_error(
+                "OUTPUT_ALREADY_EXISTS",
+                {"relative_path": "_reports/synthesis.json"},
+            )
+        atomic_write_json(
+            report_path,
+            {
+                "schema_version": 1,
+                "run_id": run_id,
+                "generated_at": self._utc_now(),
+                "output_relative_path": relative.as_posix(),
+                "output_sha256": sha256_file(target),
+                "model_id": request.model_id,
+                "model_revision": request.model_revision,
+                "source_document_count": len(request.sources),
+                "source_chunk_count": request.source_chunk_count,
+                "generation_count": request.generation_count,
+                "sources": [
+                    {
+                        "relative_path": source.relative_path,
+                        "source_sha256": source.source_sha256,
+                    }
+                    for source in request.sources
+                ],
+            },
+        )
+        return relative.as_posix()
 
     def _open_prepared_run(self, run_id: str) -> tuple[Path, dict[str, Any]]:
         candidate = self._after_root / "runs" / run_id
@@ -207,6 +281,29 @@ class FolderRevisionWorkspace:
         if self._content_signature(self._before_root) != expected:
             raise revision_error("INPUT_HASH_CHANGED")
 
+    def _verify_synthesis_manifest(self, run_root: Path, run_id: str) -> None:
+        report_path = run_root / "_reports" / "synthesis.json"
+        if not report_path.exists():
+            return
+        try:
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            relative = self._validate_output_relative_path(report["output_relative_path"])
+            expected_sha256 = str(report["output_sha256"])
+        except (KeyError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as error:
+            raise revision_error("COMPARISON_INCOMPLETE", {"run_id": run_id}) from error
+        candidate = run_root / "documents" / relative
+        if is_link_or_reparse(candidate):
+            raise revision_error("LINK_NOT_ALLOWED", {"run_id": run_id})
+        try:
+            output_path = candidate.resolve(strict=True)
+        except FileNotFoundError as error:
+            raise revision_error("COMPARISON_INCOMPLETE", {"run_id": run_id}) from error
+        documents_root = (run_root / "documents").resolve(strict=True)
+        if not output_path.is_file() or not is_within(output_path, documents_root):
+            raise revision_error("PATH_ESCAPE", {"run_id": run_id})
+        if sha256_file(output_path) != expected_sha256:
+            raise revision_error("COMPARISON_INCOMPLETE", {"run_id": run_id})
+
     def _inventory(self, root: Path) -> list[dict[str, Any]]:
         validate_tree(root)
         entries: list[dict[str, Any]] = []
@@ -244,6 +341,17 @@ class FolderRevisionWorkspace:
 
     def _utc_now(self) -> str:
         return self._clock.now().isoformat().replace("+00:00", "Z")
+
+    @staticmethod
+    def _validate_output_relative_path(value: str) -> PurePosixPath:
+        if not value or "\\" in value or "\x00" in value:
+            raise revision_error("PATH_ESCAPE")
+        path = PurePosixPath(value)
+        if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+            raise revision_error("PATH_ESCAPE", {"relative_path": value})
+        if path.suffix.lower() != ".md":
+            raise revision_error("TEXT_FORMAT_UNSUPPORTED", {"relative_path": value})
+        return path
 
     @staticmethod
     def _to_run_dto(run_root: Path, manifest: dict[str, Any]) -> RevisionRunDto:

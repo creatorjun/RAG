@@ -16,6 +16,11 @@ class TextDocumentSourcePort(Protocol):
         raise NotImplementedError
 
 
+class TextDocumentCollectionPort(TextDocumentSourcePort, Protocol):
+    async def list_relative_paths(self) -> tuple[str, ...]:
+        raise NotImplementedError
+
+
 class LongDocumentChunkerPort(Protocol):
     async def chunk(
         self,

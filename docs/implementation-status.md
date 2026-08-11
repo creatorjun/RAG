@@ -9,22 +9,25 @@
 
 ### 1.1 프로젝트 기반
 
-- `.gitignore`, `.env.example`, `pyproject.toml`, `requirements.txt`, `requirements-dev.txt`
+- `.gitignore`, `.env.example`, `pyproject.toml`, `requirements.txt`, `requirements-dev.txt`, `requirements-mlx.txt`
 - `config/default.yaml`, `config/development.yaml`, `config/production.yaml`
 - Python 3.10 이상 `src` 레이아웃과 `rag` 콘솔 진입점
 - Pydantic 기반 strict 설정 스키마, 환경별 YAML 병합, 허용 환경 변수 제한
 - Ruff, mypy strict, pytest, branch coverage 85% gate
 
-런타임 직접 의존성은 현재 구현에 필요한 Pydantic과 PyYAML만 고정했다. MLX, BGE-M3, FAISS, 파서 의존성은 Milestone 0의 대상 Mac 실측과 라이선스 검토가 끝난 뒤 별도 그룹으로 잠근다. 검증 가능한 `uv` 실행 파일이 현재 환경에 없어 `uv.lock`은 아직 생성하지 않았다.
+기본 런타임 직접 의존성은 Pydantic과 PyYAML을 고정했다. Apple Silicon의 통합 문서 생성용
+`mlx-lm`은 `requirements-mlx.txt`와 `local-mlx` optional dependency에 분리해 고정했다.
+BGE-M3, FAISS, 파서 의존성은 대상 Mac 실측과 라이선스 검토가 끝난 뒤 별도 그룹으로 잠근다.
+검증 가능한 `uv` 실행 파일이 현재 환경에 없어 `uv.lock`은 아직 생성하지 않았다.
 
 ### 1.2 Clean Architecture 기반
 
 | 계층 | 구현 내용 |
 | --- | --- |
 | Domain | 오류 범주·안전 메시지, run ID·SHA-256 값 객체, 리비전·파일 변경 상태 |
-| Application | revision prepare·compare·finalize 포트, DTO, 유스케이스 |
-| Infrastructure | 설정 loader, clock·ID 어댑터, 경로 보안, 원자 쓰기, 폴더 workspace, tree comparator |
-| Presentation | `rag doctor`, `rag revision prepare`, `compare`, `finalize` |
+| Application | revision prepare·compare·finalize와 전체 문서 통합 포트, DTO, 유스케이스 |
+| Infrastructure | 설정 loader, MLX 어댑터, 청킹·계획, 경로 보안, 원자 쓰기, 폴더 workspace, tree comparator |
+| Presentation | `rag doctor`, `rag revision prepare`, `compare`, `finalize`, `rag document integrate` |
 | Composition | `bootstrap.py` 단일 조립 지점과 명시적 close 경계 |
 
 AST 기반 아키텍처 테스트가 Domain에서 바깥 계층으로 향하는 import와 Application에서 Infrastructure·Presentation으로 향하는 import를 차단한다.
@@ -63,21 +66,34 @@ AST 기반 아키텍처 테스트가 Domain에서 바깥 계층으로 향하는 
 
 | 검사 | 결과 |
 | --- | --- |
-| pytest | 17 passed, 5 subtests passed |
-| branch coverage | 87.03%, 기준 85% 통과 |
+| pytest | 42 passed |
+| branch coverage | 87.12%, 기준 85% 통과 |
 | 프로젝트 스킬 unittest | 4 passed |
 | Ruff | 통과 |
-| mypy strict | 29 source files 통과 |
+| mypy strict | 46 source files 통과 |
 | 아키텍처 import 경계 | 위반 0건 |
 | editable package 설치 | 성공, `rag` 콘솔 스크립트 생성 |
 | `rag doctor` | development 설정에서 성공, web disabled 확인 |
 | Oracle Linux 9.8 CLI smoke | 입력 9개, added 1, modified 1, removed 1, unchanged 7, finalize 성공 |
 
-검증은 Windows 개발 환경의 Python 3.12.13에서 수행했다. 대상 MacBook Pro M4 Max의 MLX 처리량·메모리와 Python 3.10 호환 실행은 아직 검증하지 않았다.
+현재 변경은 Apple Silicon 36GB Mac의 Python 3.14.6에서 검증했다. MLX 0.32.0과 mlx-lm
+0.31.3 설치·import·API 계약은 확인했지만, 16.1GB 모델 가중치를 사용한 처리량·메모리 실측은
+아직 실행하지 않았다.
+
+### 3.1 전체 문서 통합 수직 슬라이스
+
+- `rag document integrate` 단일 명령으로 새 revision run 준비, 전체 지원 텍스트 탐색, 구조 인식
+  청킹, 계층형 map/reduce 통합, Markdown 결과 기록, 비교 보고서 생성을 연결했다.
+- 기본 모델은 `mlx-community/Qwen3.6-27B-4bit`이며 설정에 Hugging Face 커밋 SHA를 고정했다.
+- 모델은 첫 실행 시 MLX/Hugging Face 캐시에 다운로드되며 문서 본문은 로컬 추론 경계를
+  벗어나지 않는다.
+- 결과는 prepared 상태로 남겨 사람이 검토한 뒤 별도 `revision finalize` 명령으로 확정한다.
+- 합성 매니페스트는 모델 ID·revision, 입력 파일 SHA-256, 청크·생성 횟수, 출력 SHA-256을
+  기록한다.
 
 ## 4. 다음 구현 순서
 
-1. Milestone 0 대상 Mac에서 Qwen·BGE·파서·FAISS 스파이크와 dependency·model manifest를 고정한다.
+1. 대상 Mac에서 Qwen 실제 처리량·메모리 회귀를 측정하고 모델 파일별 공급망 매니페스트를 완성한다.
 2. 전체 설정 스키마와 production 전용 검증, `uv.lock`, 공급망 hash를 완성한다.
 3. SQLite migration, 핵심 schema, CAS, metadata repository를 구현한다.
 4. filesystem source와 sidecar ACL reader를 리비전 workspace에 연결한다.

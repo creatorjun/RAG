@@ -87,6 +87,26 @@ _REVISION_ERROR_SPECS: dict[str, tuple[ErrorCategory, str]] = {
         ErrorCategory.CONSISTENCY,
         "컨텍스트 계획에 같은 항목이 중복 포함되었습니다.",
     ),
+    "NO_TEXT_DOCUMENTS": (
+        ErrorCategory.INVALID_INPUT,
+        "통합할 수 있는 UTF-8 텍스트 문서가 없습니다.",
+    ),
+    "OUTPUT_ALREADY_EXISTS": (
+        ErrorCategory.INVALID_INPUT,
+        "생성 문서 경로가 실행 복사본에 이미 존재합니다.",
+    ),
+    "MODEL_GENERATION_FAILED": (
+        ErrorCategory.MODEL_OUTPUT,
+        "로컬 모델이 통합 문서를 생성하지 못했습니다.",
+    ),
+    "MODEL_OUTPUT_EMPTY": (
+        ErrorCategory.MODEL_OUTPUT,
+        "로컬 모델이 비어 있는 결과를 반환했습니다.",
+    ),
+    "PLATFORM_UNSUPPORTED": (
+        ErrorCategory.INVALID_INPUT,
+        "MLX 로컬 모델은 Apple Silicon macOS에서만 실행할 수 있습니다.",
+    ),
 }
 
 

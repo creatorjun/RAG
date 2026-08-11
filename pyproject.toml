@@ -17,6 +17,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+local-mlx = [
+  "mlx-lm>=0.31.3,<0.32",
+]
 dev = [
   "hypothesis>=6.0,<7.0",
   "import-linter>=2.0,<3.0",

@@ -12,9 +12,22 @@ from enterprise_rag.infrastructure.sources.before_text_source import BeforeTextD
 
 
 class BeforeTextDocumentSourceTest(unittest.TestCase):
+    def test_lists_supported_text_documents_in_stable_order(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            before = Path(temporary).resolve() / "before"
+            (before / "nested").mkdir(parents=True)
+            (before / "z.yaml").write_text("z: 1\n", encoding="utf-8")
+            (before / "nested" / "a.md").write_text("a\n", encoding="utf-8")
+            (before / "ignored.pdf").write_bytes(b"%PDF")
+            source = BeforeTextDocumentSource(before, 1024)
+            self.assertEqual(
+                asyncio.run(source.list_relative_paths()),
+                ("nested/a.md", "z.yaml"),
+            )
+
     def test_reads_utf8_document_with_stable_identity(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             before = root / "before"
             before.mkdir()
             content = "Oracle Linux 운영 문서🙂\n"
@@ -30,7 +43,7 @@ class BeforeTextDocumentSourceTest(unittest.TestCase):
 
     def test_rejects_path_escape_unsupported_encoding_and_size(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             before = root / "before"
             before.mkdir()
             (root / "outside.md").write_text("outside", encoding="utf-8")

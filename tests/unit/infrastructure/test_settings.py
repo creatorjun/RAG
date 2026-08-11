@@ -46,6 +46,9 @@ def _valid_settings() -> dict[str, object]:
         },
         "models": {
             "llm": {
+                "backend": "mlx-lm",
+                "model_id": "mlx-community/Qwen3.6-27B-4bit",
+                "revision": "c000ac2c2057d94be3fa931000c31723aac53282",
                 "context_tokens": 16384,
                 "reserved_tokens": 512,
             }
@@ -114,7 +117,13 @@ class SettingsTest(unittest.TestCase):
     def test_rejects_context_budget_that_cannot_reduce(self) -> None:
         value = _valid_settings()
         models = dict(value["models"])
-        models["llm"] = {"context_tokens": 4096, "reserved_tokens": 512}
+        models["llm"] = {
+            "backend": "mlx-lm",
+            "model_id": "mlx-community/Qwen3.6-27B-4bit",
+            "revision": "c000ac2c2057d94be3fa931000c31723aac53282",
+            "context_tokens": 4096,
+            "reserved_tokens": 512,
+        }
         value["models"] = models
         with self.assertRaises(ValidationError):
             Settings.model_validate(value)

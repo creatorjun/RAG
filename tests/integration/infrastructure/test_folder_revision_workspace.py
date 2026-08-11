@@ -8,6 +8,10 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 
+from enterprise_rag.application.dto.revision import (
+    GeneratedDocumentWriteDto,
+    SourceDocumentRecordDto,
+)
 from enterprise_rag.domain.errors import ApplicationError
 from enterprise_rag.domain.revision import FileChangeStatus, RevisionRunState
 from enterprise_rag.infrastructure.workspace.folder_revision_workspace import (
@@ -51,9 +55,52 @@ def _tree_hash(root: Path) -> str:
 
 
 class FolderRevisionWorkspaceTest(unittest.TestCase):
+    def test_generated_document_writer_records_manifest_and_blocks_escape(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            before = root / "before"
+            after = root / "after"
+            before.mkdir()
+            after.mkdir()
+            (before / "document.md").write_text("source\n", encoding="utf-8")
+            workspace = _workspace(before, after)
+            run_id = "20260810t120000z-generated"
+            asyncio.run(workspace.prepare_run(run_id))
+            request = GeneratedDocumentWriteDto(
+                "generated/integrated.md",
+                "# Integrated\n",
+                "test/model",
+                "a" * 40,
+                (SourceDocumentRecordDto("document.md", "b" * 64),),
+                1,
+                2,
+            )
+            written = asyncio.run(workspace.write_generated_document(run_id, request))
+            self.assertEqual(written, "generated/integrated.md")
+            self.assertTrue(
+                (after / "runs" / run_id / "_reports" / "synthesis.json").is_file()
+            )
+            escaped = GeneratedDocumentWriteDto(
+                "../escape.md",
+                "blocked",
+                "test/model",
+                "a" * 40,
+                (),
+                0,
+                0,
+            )
+            with self.assertRaises(ApplicationError) as captured:
+                asyncio.run(workspace.write_generated_document(run_id, escaped))
+            self.assertEqual(captured.exception.code, "PATH_ESCAPE")
+            generated = after / "runs" / run_id / "documents" / "generated" / "integrated.md"
+            generated.write_text("tampered\n", encoding="utf-8")
+            with self.assertRaises(ApplicationError) as captured:
+                asyncio.run(workspace.finalize_run(run_id))
+            self.assertEqual(captured.exception.code, "COMPARISON_INCOMPLETE")
+
     def test_prepare_compare_finalize_and_preserve_before(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             before = root / "before"
             after = root / "after"
             before.mkdir()
@@ -87,7 +134,7 @@ class FolderRevisionWorkspaceTest(unittest.TestCase):
 
     def test_rejects_existing_run(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             before = root / "before"
             after = root / "after"
             before.mkdir()
@@ -102,7 +149,7 @@ class FolderRevisionWorkspaceTest(unittest.TestCase):
 
     def test_rejects_changed_before_tree(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             before = root / "before"
             after = root / "after"
             before.mkdir()
@@ -119,7 +166,7 @@ class FolderRevisionWorkspaceTest(unittest.TestCase):
 
     def test_rejects_overlapping_roots(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             root.mkdir(exist_ok=True)
             with self.assertRaises(ApplicationError) as captured:
                 _workspace(root, root)

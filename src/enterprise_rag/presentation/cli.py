@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import importlib.util
 import json
 import sys
 from collections.abc import Sequence
@@ -10,7 +11,11 @@ from dataclasses import asdict
 from pathlib import Path
 
 from enterprise_rag.application.dto.long_document import LongDocumentPlanDto
-from enterprise_rag.application.dto.revision import FolderComparisonDto, RevisionRunDto
+from enterprise_rag.application.dto.revision import (
+    DocumentIntegrationDto,
+    FolderComparisonDto,
+    RevisionRunDto,
+)
 from enterprise_rag.bootstrap import Application, build_application
 from enterprise_rag.domain.errors import ApplicationError
 
@@ -30,6 +35,9 @@ def _build_parser() -> argparse.ArgumentParser:
     document_commands = document.add_subparsers(dest="document_command", required=True)
     plan = document_commands.add_parser("plan")
     plan.add_argument("--relative-path", required=True)
+    integrate = document_commands.add_parser("integrate")
+    integrate.add_argument("--run-id")
+    integrate.add_argument("--output", default="integrated-technical-guide.md")
     return parser
 
 
@@ -89,6 +97,22 @@ def _serialize_long_document_plan(value: LongDocumentPlanDto) -> dict[str, objec
     }
 
 
+def _serialize_integration(value: DocumentIntegrationDto) -> dict[str, object]:
+    return {
+        "run_id": value.run.run_id,
+        "state": value.run.state.value,
+        "output_relative_path": (
+            f"{value.run.documents_relative_root}/{value.output_relative_path}"
+        ),
+        "model_id": value.model_id,
+        "model_revision": value.model_revision,
+        "source_document_count": value.source_document_count,
+        "source_chunk_count": value.source_chunk_count,
+        "generation_count": value.generation_count,
+        "comparison": _serialize_comparison(value.comparison),
+    }
+
+
 async def _execute(application: Application, args: argparse.Namespace) -> dict[str, object]:
     if args.command == "doctor":
         settings = application.configuration.settings
@@ -100,12 +124,21 @@ async def _execute(application: Application, args: argparse.Namespace) -> dict[s
             "operating_context_tokens": settings.models.llm.context_tokens,
             "chunk_max_tokens": settings.chunking.max_tokens,
             "token_counter": settings.chunking.tokenizer_id,
+            "model_id": settings.models.llm.model_id,
+            "model_revision": settings.models.llm.revision,
+            "mlx_lm_available": importlib.util.find_spec("mlx_lm") is not None,
             "before_root_readable": application.configuration.paths.before_root.is_dir(),
             "after_root_available": application.configuration.paths.after_root.is_dir(),
         }
     if args.command == "document":
-        result = await application.plan_long_document.execute(args.relative_path)
-        return _serialize_long_document_plan(result)
+        if args.document_command == "plan":
+            plan_result = await application.plan_long_document.execute(args.relative_path)
+            return _serialize_long_document_plan(plan_result)
+        integration_result = await application.integrate_documents.execute(
+            args.run_id,
+            args.output,
+        )
+        return _serialize_integration(integration_result)
     if args.revision_command == "prepare":
         return _serialize_run(await application.prepare_revision_run.execute(args.run_id))
     if args.revision_command == "compare":

@@ -60,6 +60,9 @@ class ChunkingSettings(_StrictModel):
 
 
 class LlmSettings(_StrictModel):
+    backend: Literal["mlx-lm"]
+    model_id: str = Field(min_length=3)
+    revision: str = Field(pattern=r"^[0-9a-f]{40}$")
     context_tokens: Literal[4096, 16384, 24576, 32768]
     reserved_tokens: int = Field(ge=128)
 

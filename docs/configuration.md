@@ -120,14 +120,11 @@ chunking:
 
 models:
   llm:
-    id: "mlx-community/Qwen3.6-27B-4bit"
-    revision: "pinned-revision"
-    runtime: "mlx-vlm"
-    quantization: "4bit"
+    backend: "mlx-lm"
+    model_id: "mlx-community/Qwen3.6-27B-4bit"
+    revision: "c000ac2c2057d94be3fa931000c31723aac53282"
     context_tokens: 16384
     reserved_tokens: 512
-    lazy_load: true
-    request_timeout_seconds: 600
   embedding:
     id: "BAAI/bge-m3"
     revision: "pinned-revision"
@@ -252,6 +249,7 @@ backup:
 ### 4.4 모델
 
 - LLM revision과 embedding revision은 production에서 필수다.
+- 로컬 LLM backend는 Apple Silicon에서 `mlx-lm`만 허용한다.
 - `context_tokens`는 벤치마크가 승인한 값 집합에 포함돼야 한다.
 - 모든 목적의 출력 상한과 reserved token을 합해 context를 넘지 않아야 한다.
 - 임베딩 normalize는 FAISS inner product 사용 시 true여야 한다.

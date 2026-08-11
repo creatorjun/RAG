@@ -2,7 +2,11 @@
 from pathlib import Path
 from typing import Protocol
 
-from enterprise_rag.application.dto.revision import FolderComparisonDto, RevisionRunDto
+from enterprise_rag.application.dto.revision import (
+    FolderComparisonDto,
+    GeneratedDocumentWriteDto,
+    RevisionRunDto,
+)
 
 
 class DocumentWorkspacePort(Protocol):
@@ -13,6 +17,13 @@ class DocumentWorkspacePort(Protocol):
         raise NotImplementedError
 
     async def finalize_run(self, run_id: str) -> RevisionRunDto:
+        raise NotImplementedError
+
+    async def write_generated_document(
+        self,
+        run_id: str,
+        request: GeneratedDocumentWriteDto,
+    ) -> str:
         raise NotImplementedError
 
 
