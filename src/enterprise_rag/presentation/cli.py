@@ -16,6 +16,7 @@ from enterprise_rag.application.dto.revision import (
     FolderComparisonDto,
     RevisionRunDto,
 )
+from enterprise_rag.application.use_cases.integrate_documents import IntegrationProgress
 from enterprise_rag.bootstrap import Application, build_application
 from enterprise_rag.domain.errors import ApplicationError
 
@@ -113,6 +114,17 @@ def _serialize_integration(value: DocumentIntegrationDto) -> dict[str, object]:
     }
 
 
+def _print_integration_progress(value: IntegrationProgress) -> None:
+    counter = ""
+    if value.completed is not None and value.total is not None:
+        counter = f" ({value.completed}/{value.total})"
+    print(
+        f"[{value.percentage:3d}%] {value.message}{counter}",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
 async def _execute(application: Application, args: argparse.Namespace) -> dict[str, object]:
     if args.command == "doctor":
         settings = application.configuration.settings
@@ -137,6 +149,7 @@ async def _execute(application: Application, args: argparse.Namespace) -> dict[s
         integration_result = await application.integrate_documents.execute(
             args.run_id,
             args.output,
+            progress=_print_integration_progress,
         )
         return _serialize_integration(integration_result)
     if args.revision_command == "prepare":

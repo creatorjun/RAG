@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 
 from enterprise_rag.application.dto.long_document import (
     ChunkingConfigDto,
@@ -30,6 +31,18 @@ _SYSTEM_PROMPT = """당신은 사내 기술 문서 통합 편집자다.
 근거에 없는 사실은 만들지 않는다. 상충하거나 불확실한 내용은 명시한다.
 모든 주요 주장과 절차에는 [source:상대/경로] 형식의 출처를 유지한다.
 출력은 한국어 Markdown 본문만 작성하고 사고 과정이나 코드 펜스는 출력하지 않는다."""
+
+
+@dataclass(frozen=True, slots=True)
+class IntegrationProgress:
+    percentage: int
+    stage: str
+    message: str
+    completed: int | None = None
+    total: int | None = None
+
+
+ProgressCallback = Callable[[IntegrationProgress], None]
 
 
 class IntegrateDocuments:
@@ -65,7 +78,9 @@ class IntegrateDocuments:
         self,
         run_id: str | None = None,
         output_relative_path: str = "integrated-technical-guide.md",
+        progress: ProgressCallback | None = None,
     ) -> DocumentIntegrationDto:
+        self._report(progress, 0, "discovering", "원본 문서를 찾는 중")
         validated_run_id = self._validated_run_id(run_id)
         paths = await self._source.list_relative_paths()
         if not paths:
@@ -74,7 +89,7 @@ class IntegrateDocuments:
         documents = []
         chunks: list[LongTextChunkDto] = []
         chunk_sources: dict[str, str] = {}
-        for path in paths:
+        for document_index, path in enumerate(paths, start=1):
             document = await self._source.read(path)
             documents.append(document)
             chunk_set = await self._chunker.chunk(document, self._chunking_config)
@@ -86,9 +101,18 @@ class IntegrateDocuments:
             for chunk in chunk_set.chunks:
                 chunks.append(chunk)
                 chunk_sources[chunk.chunk_id] = document.relative_path
+            self._report(
+                progress,
+                5 + round(15 * document_index / len(paths)),
+                "reading",
+                "원본 문서를 읽고 청크로 분할하는 중",
+                document_index,
+                len(paths),
+            )
         if not chunks:
             raise revision_error("NO_TEXT_DOCUMENTS")
 
+        self._report(progress, 22, "planning", "모델 처리 계획을 만드는 중")
         plan = self._planner.plan(
             tuple(chunks),
             self._map_budget,
@@ -99,7 +123,11 @@ class IntegrateDocuments:
         if not plan.complete or plan.source_item_count != len(chunks):
             raise revision_error("CHUNK_COVERAGE_FAILED")
 
+        generation_total = sum(len(batches) for batches in plan.reduce_rounds)
+        generation_total += len(plan.map_batches) + 1
+        self._report(progress, 25, "loading_model", "로컬 모델을 불러오는 중")
         await self._generator.prepare()
+        self._report(progress, 30, "preparing_run", "결과 작업 공간을 준비하는 중")
         run = await self._workspace.prepare_run(validated_run_id)
         chunk_by_id = {chunk.chunk_id: chunk for chunk in chunks}
         results: dict[str, str] = {}
@@ -111,6 +139,7 @@ class IntegrateDocuments:
                 self._map_budget.max_output_tokens,
             )
             generation_count += 1
+            self._report_generation(progress, generation_count, generation_total)
         for round_batches in plan.reduce_rounds:
             for batch in round_batches:
                 prompt = self._reduce_prompt(batch, results)
@@ -119,6 +148,7 @@ class IntegrateDocuments:
                     self._reduce_budget.max_output_tokens,
                 )
                 generation_count += 1
+                self._report_generation(progress, generation_count, generation_total)
         if plan.root_result_id is None or plan.root_result_id not in results:
             raise revision_error("MODEL_OUTPUT_EMPTY")
 
@@ -128,6 +158,7 @@ class IntegrateDocuments:
             self._reduce_budget.max_output_tokens,
         )
         generation_count += 1
+        self._report_generation(progress, generation_count, generation_total)
         final_document = self._normalize_markdown(final_document)
         request = GeneratedDocumentWriteDto(
             relative_path=output_relative_path,
@@ -141,11 +172,14 @@ class IntegrateDocuments:
             source_chunk_count=len(chunks),
             generation_count=generation_count,
         )
+        self._report(progress, 94, "writing", "통합 문서를 저장하는 중")
         written_path = await self._workspace.write_generated_document(
             validated_run_id,
             request,
         )
+        self._report(progress, 97, "comparing", "원본과 결과를 비교하는 중")
         comparison = await self._workspace.compare_run(validated_run_id)
+        self._report(progress, 100, "completed", "문서 통합 완료")
         return DocumentIntegrationDto(
             run=run,
             output_relative_path=written_path,
@@ -156,6 +190,34 @@ class IntegrateDocuments:
             generation_count=generation_count,
             comparison=comparison,
         )
+
+    @staticmethod
+    def _report_generation(
+        progress: ProgressCallback | None,
+        completed: int,
+        total: int,
+    ) -> None:
+        percentage = 30 + round(62 * completed / total)
+        IntegrateDocuments._report(
+            progress,
+            percentage,
+            "generating",
+            "통합 문서를 생성하는 중",
+            completed,
+            total,
+        )
+
+    @staticmethod
+    def _report(
+        progress: ProgressCallback | None,
+        percentage: int,
+        stage: str,
+        message: str,
+        completed: int | None = None,
+        total: int | None = None,
+    ) -> None:
+        if progress is not None:
+            progress(IntegrationProgress(percentage, stage, message, completed, total))
 
     def _validated_run_id(self, value: str | None) -> str:
         candidate = value or (

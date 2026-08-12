@@ -36,6 +36,10 @@ rag revision finalize --run-id 20260810t120000z-oracle
 rag document integrate
 ```
 
+실행 중에는 문서 탐색, 청크 분할, 모델 로딩, 생성 배치, 저장 및 비교 단계가
+`[ 45%] 통합 문서를 생성하는 중 (2/8)` 형식으로 표시됩니다. 최종 JSON 결과는 기존과
+동일하게 표준 출력으로 제공되므로 리다이렉션이나 스크립트 연동에도 영향을 주지 않습니다.
+
 실행 결과는 자동 생성된
 `data/after/runs/<run_id>/documents/integrated-technical-guide.md`에 저장됩니다. 원본 복사본과
 통합 문서를 검토한 뒤 확정합니다.

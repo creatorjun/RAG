@@ -184,6 +184,7 @@ class RevisionCliTest(unittest.TestCase):
         application.integrate_documents.execute.assert_awaited_once_with(
             None,
             "integrated-technical-guide.md",
+            progress=unittest.mock.ANY,
         )
 
 

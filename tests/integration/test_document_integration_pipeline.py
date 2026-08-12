@@ -122,7 +122,8 @@ class DocumentIntegrationPipelineTest(unittest.TestCase):
                 separator_tokens=8,
             )
 
-            result = asyncio.run(use_case.execute())
+            progress = []
+            result = asyncio.run(use_case.execute(progress=progress.append))
 
             run_root = after / "runs" / result.run.run_id
             output = run_root / "documents" / "integrated-technical-guide.md"
@@ -132,6 +133,18 @@ class DocumentIntegrationPipelineTest(unittest.TestCase):
             self.assertEqual(result.comparison.counts["added"], 1)
             self.assertEqual(result.comparison.counts["unchanged"], 2)
             self.assertGreaterEqual(result.generation_count, 2)
+            self.assertEqual(progress[0].percentage, 0)
+            self.assertEqual(progress[-1].percentage, 100)
+            self.assertEqual(progress[-1].stage, "completed")
+            self.assertEqual(
+                [item.percentage for item in progress],
+                sorted(item.percentage for item in progress),
+            )
+            generation_progress = [
+                item for item in progress if item.stage == "generating"
+            ]
+            self.assertEqual(generation_progress[-1].completed, result.generation_count)
+            self.assertEqual(generation_progress[-1].total, result.generation_count)
             report = json.loads(
                 (run_root / "_reports" / "synthesis.json").read_text(encoding="utf-8")
             )
