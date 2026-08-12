@@ -124,6 +124,12 @@ Hugging Face 검색은 GUI에서 오프라인 모드를 해제한 뒤 명시적�
 메모리 기반 적합성을 DTO로 반환한다. Coordinator는 Job 생성 직전에 선택을 재검증하고
 Worker는 Job snapshot에 저장된 동일 commit만 적재한다.
 
+모델 다운로드는 Coordinator process의 별도 network 작업이며 MLX 모델을 적재하지 않는다.
+Hub dry-run으로 미캐시 파일과 전송 바이트를 확정하고 cache volume의 여유를 검사한 뒤 진행한다.
+진행 callback은 원문과 인증정보 없이 파일·바이트 건수만 전달한다. 취소 또는 실패한 전송은
+Job을 만들지 않으며, 완료 snapshot을 exact commit·config·weight·cache 경로로 재검증한 뒤에만
+로컬 모델 선택으로 승격한다.
+
 ### 3.2 Track A Worker Process
 
 Track A 워커는 파싱과 임베딩 배치를 수행한다. 기본 수명은 작업 배치 단위이며, 유휴 60초 또는 Track B 우선 요청 시 정상 종료한다. 프로세스 종료를 모델 메모리 회수의 최종 보증으로 사용한다.

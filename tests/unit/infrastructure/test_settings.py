@@ -157,6 +157,14 @@ class SettingsTest(unittest.TestCase):
         with self.assertRaises(ValidationError):
             Settings.model_validate(value)
 
+    def test_rejects_model_download_reserve_below_one_gibibyte(self) -> None:
+        value = _valid_settings()
+        runtime = dict(value["runtime"])
+        runtime["model_download_reserve_bytes"] = 1024**3 - 1
+        value["runtime"] = runtime
+        with self.assertRaises(ValidationError):
+            Settings.model_validate(value)
+
 
 if __name__ == "__main__":
     unittest.main()

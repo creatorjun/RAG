@@ -76,7 +76,7 @@ AST 기반 아키텍처 테스트가 Domain에서 바깥 계층으로 향하는 
 | M1-40 | 부분 완료 | 설정·경로·web disabled doctor | 모델·DB·디스크·권한 진단 |
 | M1-43 | 완료 | prepare·compare·finalize CLI와 인수 테스트 | 운영 승인 UI 연동 |
 | M6-20 | 부분 완료 | 기존 `presentation` 내 PySide6 shell, `rag-gui`, headless import·종료 smoke | 단일 instance·macOS packaging |
-| M6-21 | 부분 완료 | 실행/설정 탭, 로컬/원격 HF 카탈로그, exact commit·cache·MLX/메모리 적합성, prompt 설정 CAS, Job 전 재검증 | 다운로드 진행·취소와 실측 benchmark 승인 |
+| M6-21 | 부분 완료 | 실행/설정 탭, 로컬/원격 HF 카탈로그, exact commit·cache·MLX/메모리 적합성, dry-run 디스크 검사, 다운로드 건수·바이트 진행/취소, snapshot 재검증, prompt 설정 CAS | 실측 benchmark 승인 |
 | M6-22 | 부분 완료 | GUI 시작/재개, 10단계 event, manifest~게시 run 무결성 체크포인트, PID·heartbeat 건강 상태 | 대규모 event paging |
 | M6-23 | 부분 완료 | 최종 품질 게이트와 게시 run·비교 digest를 Dashboard에 노출 | 결과·품질·비교 보고서 열기 |
 | M6-24 | 미착수 | Job snapshot에 알림 정책 고정 | 게시 이후 exactly-once OS 알림 adapter |
@@ -85,14 +85,14 @@ AST 기반 아키텍처 테스트가 Domain에서 바깥 계층으로 향하는 
 
 | 검사 | 결과 |
 | --- | --- |
-| pytest | 167 passed, 75 subtests passed |
-| branch coverage | 85.36%, 기준 85% 통과 |
+| pytest | 174 passed, 85 subtests passed |
+| branch coverage | 85.40%, 기준 85% 통과 |
 | 프로젝트 스킬 unittest | 4 passed |
 | Ruff | 통과 |
-| mypy strict | 126 source files 통과 |
+| mypy strict | 130 source files 통과 |
 | 아키텍처 import 경계 | 위반 0건 |
 | editable package 설치 | 성공, `rag` 콘솔 스크립트 생성 |
-| PySide6 GUI smoke | offscreen 2탭·모델 카탈로그·Worker 상태 생성과 정상 종료, `rag-gui --help` 성공 |
+| PySide6 GUI smoke | offscreen 2탭·모델 카탈로그·다운로드 진행·Worker 상태 생성과 정상 종료, `rag-gui --help` 성공 |
 | `rag doctor` | development 설정에서 성공, web disabled 확인 |
 | Oracle Linux 9.8 CLI smoke | 입력 9개, added 1, modified 1, removed 1, unchanged 7, finalize 성공 |
 
@@ -144,13 +144,16 @@ AST 기반 아키텍처 테스트가 Domain에서 바깥 계층으로 향하는 
   표시하며 Job 생성 전에 동일 선택을 다시 검증한다.
 - 현재 장비의 cache된 Qwen 27B snapshot은 16.08GB, 4-bit affine, 최대 context 262,144로
   인식됐고 보수적 예상 필요량 22.0GiB / 물리 메모리 36.0GiB로 `SUPPORTED` 판정을 받았다.
+- 원격 모델 다운로드는 exact commit dry-run으로 실제 전송 대상 파일과 바이트를 고정하고
+  5GiB 디스크 안전 여유를 검사한다. GUI에 파일·바이트 진행률과 취소를 전달하며 완료 뒤
+  commit 경로, config, 가중치와 cache catalog를 재검증한다. 실패·취소 snapshot은 Job에 쓰지 않는다.
 - 새 경로의 실제 Qwen 27B 전체 품질·처리량·메모리 회귀 평가는 아직 필요하다.
 
 ## 4. 다음 구현 순서
 
-1. Hugging Face 모델 다운로드의 사전 디스크 검사·파일 진행률·취소·snapshot 재검증을 구현한다.
-2. 모델 생성 호출 중 즉시 취소와 취소 유예 이후 안전한 프로세스 종료를 연결한다.
-3. 게시 run·품질·비교 보고서 화면과 완료 후 exactly-once macOS 알림을 연결한다.
+1. 모델 생성 호출 중 즉시 취소와 취소 유예 이후 안전한 프로세스 종료를 연결한다.
+2. 게시 run·품질·비교 보고서 화면과 완료 후 exactly-once macOS 알림을 연결한다.
+3. 모델 실측 benchmark 승인과 Metal 메모리 압력 감시를 추가한다.
 4. 대규모 Claim 관계 판정의 후보 축소와 batch 예산을 구현하고 실제 27B 평가를 수행한다.
 
 Milestone 2의 BGE 분류와 중복 제거는 위 기반 작업과 대상 Mac 실측 gate를 통과하기 전 production 코드로 추가하지 않는다.

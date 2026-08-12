@@ -69,6 +69,8 @@ class _Application:
         self.browse_local_models = _AsyncCall(ModelCatalogDto("", False, (entry,)))
         self.search_huggingface_models = _AsyncCall(ModelCatalogDto("test", True, (entry,)))
         self.inspect_model_selection = _AsyncCall(entry)
+        self.download_model = _AsyncCall(entry)
+        self.cancel_model_download = _AsyncCall(True)
         self.closed = False
 
     def close(self) -> None:
@@ -103,6 +105,17 @@ class DesktopViewModelTest(unittest.TestCase):
                 "mlx-community/Test-4bit", "a" * 40, True
             ).cached
         )
+        download_id = view_model.new_model_download_id()
+        self.assertTrue(download_id.startswith("download-"))
+        self.assertTrue(
+            view_model.download_model(
+                download_id,
+                "mlx-community/Test-4bit",
+                "a" * 40,
+                lambda _: None,
+            ).cached
+        )
+        self.assertTrue(view_model.cancel_model_download(download_id))
         self.assertEqual(
             view_model.create_job("문서 작성", "guide.md").state,
             DocumentJobState.CREATED,

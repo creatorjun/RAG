@@ -16,6 +16,10 @@ from enterprise_rag.application.dto.model_catalog import (
     ModelCatalogEntryDto,
     ModelCompatibility,
 )
+from enterprise_rag.application.dto.model_download import (
+    ModelDownloadProgressDto,
+    ModelDownloadState,
+)
 from enterprise_rag.application.dto.runner import RunnerHealth
 from enterprise_rag.bootstrap import build_job_application
 from enterprise_rag.domain.errors import ApplicationError
@@ -50,6 +54,7 @@ class _DesktopWindow:
         self._view_model = view_model
         self._settings: DesktopSettingsDto | None = None
         self._active_job_id: str | None = None
+        self._active_download_id: str | None = None
         self._closing = False
         self._executor = ThreadPoolExecutor(
             max_workers=1,
@@ -60,10 +65,12 @@ class _DesktopWindow:
         class BackgroundBridge(qt_core.QObject):  # type: ignore[misc]
             completed = qt_core.Signal(object)
             failed = qt_core.Signal(object)
+            progress = qt_core.Signal(object)
 
         self._background_bridge = BackgroundBridge()
         self._background_bridge.completed.connect(self._background_completed)
         self._background_bridge.failed.connect(self._background_failed)
+        self._background_bridge.progress.connect(self._render_download_progress)
         self.window = qt_widgets.QMainWindow()
         self.window.setWindowTitle("Local Document RAG")
         self.window.resize(1440, 920)
@@ -173,20 +180,41 @@ class _DesktopWindow:
             self._widgets.QAbstractItemView.EditTrigger.NoEditTriggers
         )
         self._model_catalog.itemDoubleClicked.connect(self._apply_selected_model)
+        self._model_catalog.itemSelectionChanged.connect(
+            self._model_catalog_selection_changed
+        )
         self._model_catalog.setMinimumHeight(220)
         model_form.addRow("카탈로그", self._model_catalog)
         catalog_footer = self._widgets.QWidget()
         footer_layout = self._widgets.QHBoxLayout(catalog_footer)
         footer_layout.setContentsMargins(0, 0, 0, 0)
-        apply_model = self._widgets.QPushButton("선택 모델 적용")
-        apply_model.clicked.connect(self._apply_selected_model)
+        self._apply_model_button = self._widgets.QPushButton("선택 모델 적용")
+        self._apply_model_button.clicked.connect(self._apply_selected_model)
+        self._download_model_button = self._widgets.QPushButton("선택 모델 다운로드")
+        self._download_model_button.clicked.connect(self._download_selected_model)
+        self._cancel_download_button = self._widgets.QPushButton("다운로드 취소")
+        self._cancel_download_button.clicked.connect(self._cancel_model_download)
+        self._cancel_download_button.setEnabled(False)
         self._model_catalog_status = self._widgets.QLabel(
             "로컬 캐시를 확인하는 중입니다."
         )
         self._model_catalog_status.setWordWrap(True)
-        footer_layout.addWidget(apply_model)
+        footer_layout.addWidget(self._apply_model_button)
+        footer_layout.addWidget(self._download_model_button)
+        footer_layout.addWidget(self._cancel_download_button)
         footer_layout.addWidget(self._model_catalog_status, 1)
         model_form.addRow("", catalog_footer)
+        self._download_progress = self._widgets.QProgressBar()
+        self._download_progress.setRange(0, 100)
+        self._download_progress.setValue(0)
+        self._download_detail = self._widgets.QLabel("다운로드 대기")
+        self._download_detail.setWordWrap(True)
+        download_progress_row = self._widgets.QWidget()
+        download_progress_layout = self._widgets.QVBoxLayout(download_progress_row)
+        download_progress_layout.setContentsMargins(0, 0, 0, 0)
+        download_progress_layout.addWidget(self._download_progress)
+        download_progress_layout.addWidget(self._download_detail)
+        model_form.addRow("다운로드 진행", download_progress_row)
         layout.addWidget(model)
 
         prompts = self._widgets.QGroupBox("시스템 프롬프트")
@@ -362,6 +390,7 @@ class _DesktopWindow:
             self._model_catalog_status.setText(
                 "오프라인 모드에서는 로컬 cache의 정확한 commit만 Job에 사용할 수 있습니다."
             )
+        self._model_catalog_selection_changed()
 
     def _refresh_local_models(self) -> None:
         query = self._model_query.text().strip()
@@ -448,16 +477,36 @@ class _DesktopWindow:
         )
         if catalog.entries:
             self._model_catalog.selectRow(0)
+        self._model_catalog_selection_changed()
 
-    def _apply_selected_model(self, *_: object) -> None:
+    def _selected_model(self) -> ModelCatalogEntryDto | None:
         row = self._model_catalog.currentRow()
         if row < 0:
-            return
+            return None
         item = self._model_catalog.item(row, 0)
         if item is None:
-            return
-        entry = item.data(self._core.Qt.ItemDataRole.UserRole)
-        if not isinstance(entry, ModelCatalogEntryDto):
+            return None
+        value = item.data(self._core.Qt.ItemDataRole.UserRole)
+        return value if isinstance(value, ModelCatalogEntryDto) else None
+
+    def _model_catalog_selection_changed(self) -> None:
+        entry = self._selected_model()
+        idle = self._active_download_id is None
+        self._apply_model_button.setEnabled(idle and entry is not None)
+        downloadable = (
+            idle
+            and entry is not None
+            and not entry.cached
+            and not entry.gated
+            and entry.compatibility
+            not in {ModelCompatibility.TOO_LARGE, ModelCompatibility.UNSUPPORTED}
+            and not self._offline_mode.isChecked()
+        )
+        self._download_model_button.setEnabled(downloadable)
+
+    def _apply_selected_model(self, *_: object) -> None:
+        entry = self._selected_model()
+        if entry is None:
             return
         self._model_id.setText(entry.model_id)
         self._model_revision.setText(entry.revision)
@@ -475,6 +524,85 @@ class _DesktopWindow:
             f"선택 적용 · {entry.compatibility.value} · {entry.compatibility_detail}{warning}"
         )
 
+    def _download_selected_model(self) -> None:
+        entry = self._selected_model()
+        if entry is None:
+            return
+        if self._offline_mode.isChecked():
+            self._model_catalog_status.setText(
+                "모델을 다운로드하려면 오프라인 모드를 해제하세요."
+            )
+            return
+        if entry.cached:
+            self._model_catalog_status.setText("이미 정확한 commit이 로컬에 있습니다.")
+            return
+        download_id = self._view_model.new_model_download_id()
+        self._active_download_id = download_id
+        self._download_progress.setValue(0)
+        self._download_detail.setText("다운로드 사전 검사를 시작합니다.")
+        self._cancel_download_button.setEnabled(True)
+        self._set_catalog_busy(True)
+        self._run_background(
+            lambda: self._view_model.download_model(
+                download_id,
+                entry.model_id,
+                entry.revision,
+                self._publish_download_progress,
+            ),
+            self._model_download_completed,
+        )
+
+    def _publish_download_progress(self, progress: ModelDownloadProgressDto) -> None:
+        if not self._closing:
+            self._background_bridge.progress.emit(progress)
+
+    def _render_download_progress(self, value: object) -> None:
+        if not isinstance(value, ModelDownloadProgressDto):
+            return
+        if value.download_id != self._active_download_id:
+            return
+        self._download_progress.setValue(value.percentage)
+        byte_progress = (
+            f"{self._human_size(value.completed_bytes)} / "
+            f"{self._human_size(value.total_bytes)}"
+            if value.total_bytes
+            else "용량 계산 중"
+        )
+        file_progress = f"파일 {value.completed_files}/{value.total_files}"
+        self._download_detail.setText(
+            f"{value.state.value} · {byte_progress} · {file_progress} · {value.message}"
+        )
+        if value.state is ModelDownloadState.CANCELLED:
+            self._cancel_download_button.setEnabled(False)
+
+    def _cancel_model_download(self) -> None:
+        download_id = self._active_download_id
+        if download_id is None:
+            return
+        try:
+            accepted = self._view_model.cancel_model_download(download_id)
+        except Exception as error:
+            self._show_error(error)
+            return
+        self._cancel_download_button.setEnabled(False)
+        self._download_detail.setText(
+            "취소를 요청했습니다. 현재 파일의 안전한 중단 지점을 기다리는 중입니다."
+            if accepted
+            else "다운로드 작업이 이미 종료되었습니다."
+        )
+
+    def _model_download_completed(self, entry: ModelCatalogEntryDto) -> None:
+        self._active_download_id = None
+        self._cancel_download_button.setEnabled(False)
+        self._offline_mode.setChecked(True)
+        self._model_id.setText(entry.model_id)
+        self._model_revision.setText(entry.revision)
+        self._render_model_inspection(entry)
+        self._download_progress.setValue(100)
+        self._download_detail.setText(
+            "COMPLETED · snapshot과 가중치 검증 완료 · 오프라인 모드로 전환했습니다."
+        )
+
     @staticmethod
     def _human_size(value: int | None) -> str:
         if value is None:
@@ -483,11 +611,17 @@ class _DesktopWindow:
         return f"{gib:.1f} GiB" if gib >= 0.1 else f"{value / (1024**2):.1f} MiB"
 
     def _set_catalog_busy(self, busy: bool) -> None:
-        self._local_models_button.setEnabled(not busy)
-        self._inspect_model_button.setEnabled(not busy)
+        idle = not busy and self._active_download_id is None
+        self._local_models_button.setEnabled(idle)
+        self._inspect_model_button.setEnabled(idle)
         self._remote_models_button.setEnabled(
-            not busy and not self._offline_mode.isChecked()
+            idle and not self._offline_mode.isChecked()
         )
+        if busy:
+            self._apply_model_button.setEnabled(False)
+            self._download_model_button.setEnabled(False)
+        else:
+            self._model_catalog_selection_changed()
 
     def _run_background(
         self,
@@ -524,8 +658,23 @@ class _DesktopWindow:
             self._background_failed(error)
 
     def _background_failed(self, error: Exception) -> None:
+        was_download = self._active_download_id is not None
+        if was_download:
+            self._active_download_id = None
+            self._cancel_download_button.setEnabled(False)
         self._set_catalog_busy(False)
         self._create_button.setEnabled(True)
+        if (
+            was_download
+            and isinstance(error, ApplicationError)
+            and error.code == "MODEL_DOWNLOAD_CANCELLED"
+        ):
+            self._download_detail.setText(
+                "CANCELLED · 불완전 파일은 모델 snapshot으로 사용되지 않습니다."
+            )
+            return
+        if was_download:
+            self._download_detail.setText("FAILED · 모델 다운로드를 완료하지 못했습니다.")
         self._show_error(error)
 
     def _save_settings(self) -> None:
@@ -763,6 +912,11 @@ class _DesktopWindow:
         self._widgets.QMessageBox.critical(self.window, "Local Document RAG", message)
 
     def close(self) -> None:
+        if self._active_download_id is not None:
+            try:
+                self._view_model.cancel_model_download(self._active_download_id)
+            except Exception:
+                pass
         self._closing = True
         for future in tuple(self._futures):
             future.cancel()

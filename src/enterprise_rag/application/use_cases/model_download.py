@@ -35,6 +35,8 @@ class DownloadModel:
         if _DOWNLOAD_ID.fullmatch(download_id) is None:
             raise revision_error("INVALID_INPUT", {"field": "download_id"})
         entry = await self._selection.execute(model_id, revision, False)
+        if entry.gated:
+            raise revision_error("MODEL_ACCESS_DENIED", {"model_id": entry.model_id})
         if entry.compatibility in {
             ModelCompatibility.UNSUPPORTED,
             ModelCompatibility.TOO_LARGE,

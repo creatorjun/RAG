@@ -79,6 +79,7 @@ runtime:
   worker_start_timeout_seconds: 30
   worker_heartbeat_seconds: 5
   worker_missed_heartbeats: 3
+  model_download_reserve_bytes: 5368709120
   cancellation_grace_seconds: 15
   track_a_idle_shutdown_seconds: 60
   track_b_idle_shutdown_seconds: 120
@@ -269,6 +270,8 @@ backup:
 - `max_parallel_llm_jobs`는 대상 장비에서 1만 허용한다.
 - `worker_heartbeat_seconds * worker_missed_heartbeats`는
   `worker_start_timeout_seconds`보다 작아야 한다. 현재 기본값은 15초와 30초다.
+- 모델 다운로드는 dry-run의 미캐시 파일 합계에 `model_download_reserve_bytes`를 더한 공간을
+  요구한다. 안전 여유는 1GiB 미만으로 설정할 수 없고 기본값은 5GiB다.
 - `critical < pressure < recovery`를 만족해야 한다.
 - batch minimum은 1이고 기본 batch 이하다.
 

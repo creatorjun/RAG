@@ -712,6 +712,46 @@ cache snapshot을 요구한다. 원격 검색 결과도 별도 다운로드가 �
 `MODEL_INCOMPATIBLE`로 거부하며 `TIGHT`, `UNKNOWN`은 경고를 보존한 채 허용한다.
 
 ```python
+class ModelDownloadState(StrEnum):
+    PREFLIGHT = "PREFLIGHT"
+    DOWNLOADING = "DOWNLOADING"
+    VERIFYING = "VERIFYING"
+    COMPLETED = "COMPLETED"
+    CANCELLED = "CANCELLED"
+
+
+@dataclass(frozen=True, slots=True)
+class ModelDownloadProgressDto:
+    download_id: str
+    model_id: str
+    revision: str
+    state: ModelDownloadState
+    completed_bytes: int
+    total_bytes: int
+    completed_files: int
+    total_files: int
+    message: str
+
+
+class ModelDownloadPort(Protocol):
+    async def download(
+        self,
+        download_id: str,
+        model_id: str,
+        revision: str,
+        progress: ModelDownloadProgressCallback,
+    ) -> ModelCatalogEntryDto: ...
+
+    async def cancel(self, download_id: str) -> bool: ...
+```
+
+다운로드 ID는 `download-<32 lowercase hex>`다. process 안에서는 한 번에 하나만 허용한다.
+`PREFLIGHT`는 파일 목록·미캐시 전송량·디스크 가용량을 확인하고, `VERIFYING`은 exact commit
+경로·config·가중치·cache catalog를 대조한다. 완료되지 않은 다운로드는 `cached=true`를
+반환하지 않는다. 취소는 `MODEL_DOWNLOAD_CANCELLED`, 공간 부족은
+`MODEL_DOWNLOAD_DISK_SPACE`, 검증 실패는 `MODEL_SNAPSHOT_INVALID`로 구분한다.
+
+```python
 @dataclass(frozen=True, slots=True)
 class JobCheckpointDto:
     checkpoint_id: str

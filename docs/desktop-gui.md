@@ -60,8 +60,20 @@ context, 라이선스, gated 여부, 수정 시각과 장비 적합성을 표로
 오프라인 모드에서는 원격 검색 버튼을 비활성화하고 cache의 정확한 commit만 선택할 수 있다.
 온라인 모드의 검색도 사용자의 버튼 동작으로만 수행하며 문서 내용은 요청에 포함하지 않는다.
 Job 생성은 백그라운드에서 모델 선택을 다시 검증하고, cache miss나 비호환 모델이면 Job
-아티팩트를 만들기 전에 거부한다. 이번 단계는 조회·선택·검증까지이며 실제 다운로드와
-다운로드 진행/취소는 다음 단계로 분리한다.
+아티팩트를 만들기 전에 거부한다.
+
+원격 모델 다운로드는 `PREFLIGHT → DOWNLOADING → VERIFYING → COMPLETED` 상태를 사용한다.
+사전 단계에서 exact commit의 dry-run 파일 목록으로 실제 전송 바이트를 계산하고, 그 용량에
+5GiB 안전 여유를 더한 값보다 cache volume의 가용 공간이 작으면 시작하지 않는다. GUI는
+전송 바이트, 전체 파일 완료 건수와 백분율을 표시한다. 다운로드는 GUI당 하나만 허용하며
+사용자 취소와 GUI 종료 시 cancellation event를 전달한다. 불완전 임시 파일은 snapshot으로
+간주하지 않는다.
+
+완료 후 commit 이름의 snapshot 디렉터리, 유효한 `config.json`, 최소 하나의 MLX 가중치 파일
+(`.safetensors` 또는 `.npz`)과 Hugging Face cache catalog의 동일 model ID·commit·경로를
+다시 대조한다. 이 검증을 모두 통과한 뒤에만 카탈로그를 `cached=true`로 갱신하고 GUI를
+오프라인 모드로 되돌린다. blob 전송 무결성과 incomplete snapshot 판정은 고정된
+`huggingface_hub` content-addressed cache 계약을 사용한다.
 
 ### 3.3 프롬프트
 
@@ -182,5 +194,5 @@ Worker 생존 상태는 Job별 runner token·PID·launch sequence와 5초 heartb
 안전한 오류 코드를 표시한다. OS 파일 lock이 실제 중복 실행 권한의 기준이고,
 `runner-state.json`은 GUI 관측과 감사 전용이다.
 
-남은 범위는 Hugging Face 다운로드·검증 진행 UI, 생성 호출 중 즉시 취소,
+남은 범위는 생성 호출 중 즉시 취소,
 결과·품질·비교 보고서 열기, exactly-once 완료 알림과 macOS packaging이다.

@@ -404,6 +404,12 @@ GUI는 파일 시스템·SQLite·Hugging Face·MLX를 직접 호출하지 않고
 `SearchHuggingFaceModels`, `InspectModelSelection`을 백그라운드에서 호출한다. Job 생성은
 동일 `InspectModelSelection.validate_for_job`을 재호출해 UI 검증 결과를 신뢰 경계로 사용하지 않는다.
 
+`HuggingFaceModelDownloader`는 `ModelDownloadPort`를 구현한다. exact commit dry-run, cache
+volume 사전 검사, 단일 active download, thread-safe 취소와 throttle된 진행 callback을 소유한다.
+다운로드 완료 뒤 독립 `ModelCatalogPort.inspect(local_only=true)`까지 성공해야 결과 entry를
+반환한다. ViewModel은 다운로드 ID만 생성하고 Widget은 Application callback을 Qt signal로
+main thread에 전달한다.
+
 ## 6. Bootstrap과 의존성 조립
 
 부트스트랩 순서는 고정한다.

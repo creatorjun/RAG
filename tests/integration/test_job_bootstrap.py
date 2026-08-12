@@ -26,6 +26,8 @@ class JobBootstrapTest(unittest.TestCase):
                 self.assertTrue(callable(control.start_document_job.execute))
                 self.assertTrue(callable(control.browse_local_models.execute))
                 self.assertTrue(callable(control.inspect_model_selection.execute))
+                self.assertTrue(callable(control.download_model.execute))
+                self.assertTrue(callable(control.cancel_model_download.execute))
             with build_job_worker_application(project_root, "development") as worker:
                 self.assertTrue(callable(worker.run_document_job.execute))
                 self.assertTrue(callable(worker.runner_leases.heartbeat))
