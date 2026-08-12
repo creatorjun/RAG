@@ -6,6 +6,7 @@ import json
 import platform
 import re
 import threading
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -64,6 +65,28 @@ class MlxTextGenerator:
                 system_prompt,
                 user_prompt,
                 max_output_tokens,
+                None,
+            )
+        except ApplicationError:
+            raise
+        except Exception as error:
+            raise revision_error("MODEL_GENERATION_FAILED") from error
+
+    async def generate_stream(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        max_output_tokens: int,
+        observer: Callable[[str], None],
+    ) -> str:
+        try:
+            self._raise_if_cancelled()
+            return await asyncio.to_thread(
+                self._generate_sync,
+                system_prompt,
+                user_prompt,
+                max_output_tokens,
+                observer,
             )
         except ApplicationError:
             raise
@@ -75,6 +98,7 @@ class MlxTextGenerator:
         system_prompt: str,
         user_prompt: str,
         max_output_tokens: int,
+        observer: Callable[[str], None] | None,
     ) -> str:
         model, tokenizer = self._load()
         messages = [
@@ -118,7 +142,10 @@ class MlxTextGenerator:
         try:
             for response in responses:
                 self._raise_if_cancelled()
-                pieces.append(str(response.text))
+                piece = str(response.text)
+                pieces.append(piece)
+                if observer is not None:
+                    observer(piece)
         finally:
             close = getattr(responses, "close", None)
             if close is not None:

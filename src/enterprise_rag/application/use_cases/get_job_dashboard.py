@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from enterprise_rag.application.dto.job_dashboard import JobDashboardDto
 from enterprise_rag.application.dto.jobs import DocumentJobDto
+from enterprise_rag.application.dto.model_stream import ModelStreamSnapshotDto
 from enterprise_rag.application.dto.runner import (
     RunnerHealth,
     RunnerLeaseDto,
@@ -13,11 +14,12 @@ from enterprise_rag.application.ports.job_checkpoint_inspector import (
     JobCheckpointInspectorPort,
 )
 from enterprise_rag.application.ports.job_repository import DocumentJobRepositoryPort
+from enterprise_rag.application.ports.model_stream import ModelStreamRepositoryPort
 from enterprise_rag.application.ports.progress_events import ProgressEventPublisherPort
 from enterprise_rag.application.ports.runner_lease_repository import (
     RunnerLeaseRepositoryPort,
 )
-from enterprise_rag.domain.errors import revision_error
+from enterprise_rag.domain.errors import ApplicationError, revision_error
 
 
 class GetJobDashboard:
@@ -31,6 +33,7 @@ class GetJobDashboard:
         worker_start_timeout_seconds: int = 30,
         worker_heartbeat_seconds: int = 5,
         worker_missed_heartbeats: int = 3,
+        model_streams: ModelStreamRepositoryPort | None = None,
     ) -> None:
         self._jobs = jobs
         self._events = events
@@ -39,6 +42,7 @@ class GetJobDashboard:
         self._clock = clock
         self._start_timeout = worker_start_timeout_seconds
         self._stale_timeout = worker_heartbeat_seconds * worker_missed_heartbeats
+        self._model_streams = model_streams
         if (runners is None) != (clock is None):
             raise ValueError("runner repository and clock must be configured together")
 
@@ -50,8 +54,20 @@ class GetJobDashboard:
         checkpoints = await self._checkpoints.inspect(job_id)
         lease = None if self._runners is None else await self._runners.load(job_id)
         runner = None if lease is None else self._runner_status(lease)
+        model_stream = ModelStreamSnapshotDto()
+        if self._model_streams is not None:
+            try:
+                model_stream = await self._model_streams.snapshot(job_id)
+            except ApplicationError:
+                # A damaged optional observability log must not hide the job,
+                # its durable checkpoints, or its cancellation controls.
+                model_stream = ModelStreamSnapshotDto()
         return JobDashboardDto(
-            DocumentJobDto.from_domain(job), events, checkpoints, runner
+            job=DocumentJobDto.from_domain(job),
+            events=events,
+            checkpoints=checkpoints,
+            runner=runner,
+            model_stream=model_stream,
         )
 
     def _runner_status(self, lease: RunnerLeaseDto) -> RunnerStatusDto:

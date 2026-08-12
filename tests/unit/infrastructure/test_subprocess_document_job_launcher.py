@@ -3,11 +3,12 @@ from __future__ import annotations
 import asyncio
 import fcntl
 import tempfile
+import threading
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from enterprise_rag.application.dto.jobs import CreateDocumentJobDto
 from enterprise_rag.domain.errors import ApplicationError
@@ -48,10 +49,12 @@ class SubprocessDocumentJobLauncherTest(unittest.TestCase):
                 )
             )
             launcher = self._launcher(root)
+            reaped = threading.Event()
+            wait = Mock(side_effect=lambda: reaped.set() or 0)
             with patch(
                 "enterprise_rag.infrastructure.jobs.subprocess_document_job_launcher."
                 "subprocess.Popen",
-                return_value=SimpleNamespace(pid=321),
+                return_value=SimpleNamespace(pid=321, wait=wait),
             ) as popen:
                 process_id = asyncio.run(launcher.launch(job.job_id))
             self.assertEqual(process_id, 321)
@@ -60,6 +63,8 @@ class SubprocessDocumentJobLauncherTest(unittest.TestCase):
             self.assertIn("runner-" + "1" * 32, arguments[0])
             self.assertTrue(options["start_new_session"])
             self.assertEqual(len(options["pass_fds"]), 1)
+            self.assertTrue(reaped.wait(timeout=1))
+            wait.assert_called_once_with()
 
     def test_rejects_concurrent_runner_and_wraps_process_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

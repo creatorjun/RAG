@@ -245,13 +245,16 @@ RAG/
 - 문서 해시와 파이프라인 버전이 같으면 재처리하지 않는다.
 - 단계별 상태는 `pending`, `running`, `completed`, `failed`, `quarantined`로 기록한다.
 - 각 단계는 완료 결과를 원자적으로 커밋한 후 다음 작업을 큐에 넣는다.
+- 장시간 Claim 추출은 Evidence 한 건의 구조 검증 직후 write-once partial checkpoint를 커밋한다.
+- 모델 생성 조각은 검증 결과와 분리된 Job별 append-only 관측 journal로 기록한다.
 - 프로세스가 종료되어도 마지막 완료 단계부터 재개한다.
 
 ### 4.4 폴더 리비전과 최소 권한
 
 - `data/before`는 읽기 전용이며 AI, Qwen 워커, 비교 도구가 수정·삭제·이동하지 않는다.
 - 수정 작업은 고유한 `data/after/runs/<run_id>/documents`에만 수행하고 기존 run을 덮어쓰지 않는다.
-- 품질 게이트 전 중간 산출물은 `var/jobs/<job_id>`에 기록하고 after run은 게이트 통과 후 생성한다.
+- Worker 사전 점검은 `after_root` 디렉터리를 생성해 링크·중첩·쓰기 실패를 즉시 검출한다.
+- 품질 게이트 전 중간 산출물은 `var/jobs/<job_id>`에 기록하고 after의 `runs/<run_id>`는 게이트 통과 후 생성한다.
 - 준비 단계는 입력 파일의 상대 경로, 바이트 수, SHA-256을 매니페스트로 고정한다.
 - 비교 단계는 추가·수정·삭제·동일 상태, 전후 해시, UTF-8 텍스트 unified diff를 생성한다.
 - finalization 후 run은 불변으로 취급하며 후속 수정은 새 run으로 만든다.

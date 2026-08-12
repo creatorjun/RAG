@@ -33,7 +33,7 @@ GUI와 별도 프로세스이며 GUI 종료가 Job 취소를 뜻하지 않는다
   않게 한다.
 - 상태는 텍스트와 색상 chip을 함께 사용해 색상만으로 의미를 전달하지 않는다.
 - 실행 화면은 `작업 준비 → 실시간 상태 → 결과·품질 → 실행 상세` 순으로 읽히며,
-  체크포인트와 이벤트는 중첩 탭으로 전환한다.
+  체크포인트, 이벤트와 LLM 실시간 스트림은 중첩 탭으로 전환한다.
 - 설정 화면은 `작업공간·실행 정책`, `로컬 LLM`, `시스템 프롬프트`, `저장`을 독립 카드로
   분리한다. 고정 정책과 사용자 지침은 읽기 전용/편집 가능 패널로 나란히 보여준다.
 - 최소 1120×720 뷰포트를 지원하고, 정보를 압축하지 않고 화면별 수직 스크롤로 작은 화면에
@@ -58,7 +58,8 @@ GUI와 별도 프로세스이며 GUI 종료가 Job 취소를 뜻하지 않는다
 - 폴더 읽기 가능 여부, before/after/var 중첩, 링크, 지원 파일 수 사전 검사
 
 원본 폴더는 사용자 선택값이지만 Job 시작 시 불변 입력 manifest를 만들고 이후 변경을 감지한다.
-최종 결과는 품질 게이트 통과 전까지 만들지 않는다.
+Worker 사전 점검은 쓰기 권한과 경로 경계를 조기에 검증하기 위해 결과 루트 자체는 생성한다.
+최종 결과 파일과 `runs/<job_id>`는 품질 게이트 통과 전까지 만들지 않는다.
 
 ### 3.2 Hugging Face 로컬 모델
 
@@ -140,6 +141,7 @@ Job 생성은 백그라운드에서 모델 선택을 다시 검증하고, cache 
 | Job 정의 | 저장됨/없음 | 1 | 예 | 설정 fingerprint |
 | 원본 manifest | 저장됨/없음 | 문서 수 | 예 | 입력 hash |
 | Evidence | 저장됨/없음 | Evidence 수 | 예 | coverage |
+| Claim 추출 | 진행/완료 | 처리 Evidence 수/전체 | 부분 | Evidence별 재개 지점 |
 | Claim Ledger | 저장됨/없음 | Claim 수 | 예 | 관계·충돌 수 |
 | Task plan | 저장됨/없음 | Task 수 | 예 | DAG·coverage |
 | Task attempts | 진행/완료 | 검증 수/전체 | 부분 | 실패 코드 |
@@ -153,6 +155,9 @@ Job 생성은 백그라운드에서 모델 선택을 다시 검증하고, cache 
 Claim 추출에서 기술적으로 관련된 내용이 없는 Evidence는 원본·Evidence 감사 기록에는 보존하되
 Claim, Task와 최종 문서 coverage에서는 제외한다. 기술 Claim이 있는 Evidence만 Claim Ledger의
 검토 완료 집합에 들어가며, 최종 품질 게이트는 이 집합의 100% coverage를 요구한다.
+각 Evidence의 유효한 Claim 배열은 빈 배열을 포함해 `claim-drafts/<evidence-digest>.json`에 즉시
+write-once 저장한다. 다음 실행은 저장된 항목을 검증해 건너뛰므로 마지막 응답의 JSON 오류가 앞선
+전체 추출 결과를 폐기하지 않는다.
 
 GUI의 `최대 출력`은 최종 Task 문서 생성에 사용할 상한이다. Worker는 16K 같은 제한된
 context에서도 입력 공간을 확보하도록 Claim 추출 2,048, Claim 관계 2,048, Task 계획 4,096
@@ -168,7 +173,7 @@ Worker 오류로 `FAILED`가 된 Job은 명시적인 `실패 지점부터 복구
 뒤 저장된 체크포인트를 순서대로 재검증한다. 기존 진행 이벤트와 진행률은 유지하고, 유효한
 manifest·Evidence·Claim·Task 결과는 다시 생성하지 않는다.
 
-### 4.3 이벤트와 품질 상세
+### 4.3 이벤트, 모델 스트림과 품질 상세
 
 - sequence 순서의 단계 이벤트 타임라인
 - 현재 태스크와 attempt, 재작성 이유
@@ -176,11 +181,19 @@ manifest·Evidence·Claim·Task 결과는 다시 생성하지 않는다.
 - Claim/Evidence/source coverage, 충돌 노출, 실패한 품질 항목
 - 최종 문서·품질 보고서·before/after 비교 보고서 열기
 
+`LLM 실시간 스트림`은 Worker의 `stream_generate` 조각을 짧게 버퍼링해 Job별
+`runtime/model-stream.jsonl`에 append하고 Dashboard polling으로 읽는다. 화면은 생성 ID, 단계,
+시작·종료·실패와 생성 문자열을 시간 순서로 표시한다. 이 문자열은 JSON schema, Claim/Evidence,
+품질 게이트를 통과하기 전의 진단 출력이며 최종 문서로 취급하지 않는다. 화면 조회 한도는 최근
+1,000 event이고 생략 여부를 명시한다. 스트림 저장 실패는 모델 결과와 Job 제어를 실패시키지 않는다.
+
 현재 결과 패널은 게시 상태, Task·Claim·Evidence coverage, 원본 수, 품질 오류 코드와
 추가·수정·삭제·동일 건수를 표시한다. 최종 문서, 품질 JSON, 비교 Markdown, 합성 JSON의 `열기`
 버튼은 Application adapter가 경계와 SHA-256을 재검증한 경로에만 활성화된다.
 
-이벤트 화면에는 원문, 전체 모델 응답과 비밀값을 표시하지 않는다.
+일반 이벤트 타임라인에는 원문, 모델 응답과 비밀값을 표시하지 않는다. 사용자가 명시적으로 여는
+로컬 스트림 탭만 선택 Job의 검증 전 모델 문자열을 표시하며 외부 전송이나 운영 로그 복제를 하지
+않는다.
 
 ## 5. Presentation 경계
 
@@ -235,7 +248,8 @@ Job 기본값이며 배포·보안 설정 YAML을 대체하지 않는다. Job �
 현재는 1~6의 실행 수직 경로를 기존 코드에 통합했다. `새 작업 생성` 후
 `파이프라인 시작/재개`를 누르면 Job별 로컬 프로세스가 manifest, Evidence, Claim,
 Task attempt, 최종 품질 게이트와 게시 run을 체크포인트하며 수행한다. 단계 완료
-event와 attempt를 사용해 중단 지점에서 멱등 재개한다.
+event와 attempt를 사용해 중단 지점에서 멱등 재개한다. Claim 추출은 Evidence별 partial
+checkpoint를 저장하고 실행 화면의 30~39% 건수 진행률과 LLM 생성 문자열을 실시간으로 갱신한다.
 
 Worker 생존 상태는 Job별 runner token·PID·launch sequence와 5초 heartbeat로 저장한다.
 실행 탭은 `STARTING`, `HEALTHY`, `STALE`, `EXITED`, `FAILED`, 마지막 heartbeat 경과 시간과
@@ -258,6 +272,7 @@ Runner의 terminal 오류 코드는 현재 오류 배너가 아니라 해당 Job
 `즉시 취소 요청`은 Job을 `CANCELLING`으로 바꾸고 검증된 Worker process group에 `SIGTERM`을
 전달한다. 화면에는 토큰 경계 중단, 정상 종료 유예 시간과 Worker 종료 확인 상태를 표시한다.
 MLX 생성은 다음 token chunk에서 중단하며, 유예 15초를 넘긴 Worker만 자기 watchdog으로
-강제 종료된다. 완료된 체크포인트는 재개 근거로 남고 미완성 생성 출력은 게시되지 않는다.
+강제 종료된다. 완료된 체크포인트는 재개 근거로 남고 미완성 구조 출력은 Task 결과나 최종 문서로
+게시되지 않는다. 진단용 스트림 조각은 검증 전 상태로 Job 내부에 남을 수 있다.
 
 남은 GUI 범위는 단일 instance 제어와 macOS application packaging이다.

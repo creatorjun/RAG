@@ -69,6 +69,9 @@ from enterprise_rag.infrastructure.config.filesystem_desktop_settings_repository
     FilesystemDesktopSettingsRepository,
 )
 from enterprise_rag.infrastructure.config.settings import SettingsLoader
+from enterprise_rag.infrastructure.jobs.filesystem_claim_draft_repository import (
+    FilesystemClaimDraftRepository,
+)
 from enterprise_rag.infrastructure.jobs.filesystem_claim_ledger_repository import (
     FilesystemClaimLedgerRepository,
 )
@@ -92,6 +95,9 @@ from enterprise_rag.infrastructure.jobs.filesystem_job_checkpoint_inspector impo
 )
 from enterprise_rag.infrastructure.jobs.filesystem_job_definition_repository import (
     FilesystemDocumentJobDefinitionRepository,
+)
+from enterprise_rag.infrastructure.jobs.filesystem_model_stream_repository import (
+    FilesystemModelStreamRepository,
 )
 from enterprise_rag.infrastructure.jobs.filesystem_runner_lease_repository import (
     FilesystemRunnerLeaseRepository,
@@ -122,6 +128,9 @@ from enterprise_rag.infrastructure.models.huggingface_model_downloader import (
     HuggingFaceModelDownloader,
 )
 from enterprise_rag.infrastructure.models.mlx_text_generator import MlxTextGenerator
+from enterprise_rag.infrastructure.models.observed_text_generator import (
+    ObservedTextGenerator,
+)
 from enterprise_rag.infrastructure.models.structured_claim_draft_generator import (
     StructuredClaimDraftGenerator,
 )
@@ -289,6 +298,7 @@ def build_job_application(
     ).hexdigest()
     evidence = FilesystemEvidenceRepository(artifacts)
     claims = FilesystemClaimLedgerRepository(artifacts)
+    claim_drafts = FilesystemClaimDraftRepository(artifacts)
     plans = FilesystemTaskPlanRepository(artifacts)
     results = FilesystemTaskResultRepository(artifacts)
     finals = FilesystemFinalDocumentRepository(artifacts)
@@ -316,7 +326,9 @@ def build_job_application(
         plans,
         results,
         finals,
+        claim_drafts,
     )
+    model_streams = FilesystemModelStreamRepository(configuration.paths.var_root)
     runner_leases = FilesystemRunnerLeaseRepository(configuration.paths.var_root)
     ids = UuidIdGenerator()
     return JobApplication(
@@ -354,6 +366,7 @@ def build_job_application(
             settings.runtime.worker_start_timeout_seconds,
             settings.runtime.worker_heartbeat_seconds,
             settings.runtime.worker_missed_heartbeats,
+            model_streams=model_streams,
         ),
         get_document_job_result=GetDocumentJobResult(repository, result_reader),
         get_completion_notification_status=GetCompletionNotificationStatus(
@@ -388,11 +401,13 @@ def build_job_worker_application(
     artifacts = FilesystemJobArtifactRepository(configuration.paths.var_root)
     evidence = FilesystemEvidenceRepository(artifacts)
     claims = FilesystemClaimLedgerRepository(artifacts)
+    claim_drafts = FilesystemClaimDraftRepository(artifacts)
     plans = FilesystemTaskPlanRepository(artifacts)
     results = FilesystemTaskResultRepository(artifacts)
     finals = FilesystemFinalDocumentRepository(artifacts)
     definitions = FilesystemDocumentJobDefinitionRepository(artifacts)
     runner_leases = FilesystemRunnerLeaseRepository(configuration.paths.var_root)
+    model_streams = FilesystemModelStreamRepository(configuration.paths.var_root)
     cancellation = ThreadCancellationToken()
     result_reader = FilesystemDocumentJobResultReader(
         configuration.paths.var_root,
@@ -431,6 +446,7 @@ def build_job_worker_application(
         definitions=definitions,
         evidence=evidence,
         claims=claims,
+        claim_drafts=claim_drafts,
         plans=plans,
         results=results,
         finals=finals,
@@ -456,6 +472,14 @@ def build_job_worker_application(
             settings.sources.max_file_bytes,
         ),
         model_factory=model_factory,
+        observed_generator_factory=lambda generator, job_id, stage: ObservedTextGenerator(
+            generator,
+            job_id,
+            stage,
+            model_streams,
+            clock,
+            ids,
+        ),
         claim_draft_generator_factory=StructuredClaimDraftGenerator,
         claim_relation_generator_factory=StructuredClaimRelationGenerator,
         task_definition_generator_factory=StructuredTaskDefinitionGenerator,

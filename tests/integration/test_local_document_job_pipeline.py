@@ -29,6 +29,9 @@ from enterprise_rag.domain.jobs import DocumentJob, DocumentJobState
 from enterprise_rag.infrastructure.chunking.structure_aware_text_chunker import (
     StructureAwareTextChunker,
 )
+from enterprise_rag.infrastructure.jobs.filesystem_claim_draft_repository import (
+    FilesystemClaimDraftRepository,
+)
 from enterprise_rag.infrastructure.jobs.filesystem_claim_ledger_repository import (
     FilesystemClaimLedgerRepository,
 )
@@ -53,6 +56,9 @@ from enterprise_rag.infrastructure.jobs.filesystem_job_checkpoint_inspector impo
 from enterprise_rag.infrastructure.jobs.filesystem_job_definition_repository import (
     FilesystemDocumentJobDefinitionRepository,
 )
+from enterprise_rag.infrastructure.jobs.filesystem_model_stream_repository import (
+    FilesystemModelStreamRepository,
+)
 from enterprise_rag.infrastructure.jobs.filesystem_task_plan_repository import (
     FilesystemTaskPlanRepository,
 )
@@ -61,6 +67,9 @@ from enterprise_rag.infrastructure.jobs.filesystem_task_result_repository import
 )
 from enterprise_rag.infrastructure.jobs.local_document_job_stages import (
     LocalDocumentJobStages,
+)
+from enterprise_rag.infrastructure.models.observed_text_generator import (
+    ObservedTextGenerator,
 )
 from enterprise_rag.infrastructure.models.structured_claim_draft_generator import (
     StructuredClaimDraftGenerator,
@@ -199,13 +208,27 @@ class _Notifier:
 
 
 class LocalDocumentJobPipelineTest(unittest.TestCase):
+    def test_rejects_nested_output_before_creating_it(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            source_root = Path(temporary).resolve() / "source"
+            source_root.mkdir()
+            nested_output = source_root / "must-not-be-created"
+
+            with self.assertRaises(ApplicationError) as captured:
+                LocalDocumentJobStages._prepare_output_root(
+                    source_root,
+                    nested_output,
+                )
+
+            self.assertEqual(captured.exception.code, "BEFORE_AFTER_OVERLAP")
+            self.assertFalse(nested_output.exists())
+
     def test_runs_real_stage_adapters_and_publishes_only_after_quality_gate(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
             source_root = root / "source"
             output_root = root / "output"
             source_root.mkdir()
-            output_root.mkdir()
             (source_root / "guide.md").write_text(
                 "# 운영 가이드\n\n서비스 상태를 매일 확인한다.\n",
                 encoding="utf-8",
@@ -215,9 +238,12 @@ class LocalDocumentJobPipelineTest(unittest.TestCase):
             artifacts = FilesystemJobArtifactRepository(root / "var")
             evidence = FilesystemEvidenceRepository(artifacts)
             claims = FilesystemClaimLedgerRepository(artifacts)
+            claim_drafts = FilesystemClaimDraftRepository(artifacts)
             plans = FilesystemTaskPlanRepository(artifacts)
             results = FilesystemTaskResultRepository(artifacts)
             finals = FilesystemFinalDocumentRepository(artifacts)
+            model_streams = FilesystemModelStreamRepository(root / "var")
+            stream_ids = _Ids()
             job = DocumentJob("job-" + "1" * 32)
             execution = JobExecutionSettingsDto(
                 str(output_root),
@@ -273,6 +299,7 @@ class LocalDocumentJobPipelineTest(unittest.TestCase):
                 ChunkingConfigDto(
                     "conservative-utf8-bytes-v1", "1", 800, 1_200, 80, 0.1
                 ),
+                claim_drafts=claim_drafts,
                 chunker=StructureAwareTextChunker(ConservativeUtf8TokenCounter()),
                 source_factory=lambda path: BeforeTextDocumentSource(path, 1_000_000),
                 workspace_factory=lambda before, after: FolderRevisionWorkspace(
@@ -284,12 +311,26 @@ class LocalDocumentJobPipelineTest(unittest.TestCase):
                     1_000_000,
                 ),
                 model_factory=lambda _: _StructuredGenerator(),
+                observed_generator_factory=lambda generator, job_id, stage: (
+                    ObservedTextGenerator(
+                        generator,
+                        job_id,
+                        stage,
+                        model_streams,
+                        clock,
+                        stream_ids,
+                    )
+                ),
                 claim_draft_generator_factory=claim_draft_factory,
                 claim_relation_generator_factory=claim_relation_factory,
                 task_definition_generator_factory=task_definition_factory,
                 task_output_generator_factory=task_output_factory,
                 file_digest=sha256_file,
             ).stages()
+
+            self.assertFalse(output_root.exists())
+            asyncio.run(stages[0].execute(job.job_id))
+            self.assertTrue(output_root.is_dir())
 
             completed = asyncio.run(
                 RunDocumentJob(jobs, jobs, stages).execute(job.job_id)
@@ -301,6 +342,20 @@ class LocalDocumentJobPipelineTest(unittest.TestCase):
             self.assertEqual(stage_budgets["task_plan"][0], 4_096)
             self.assertEqual(stage_budgets["task_output"][0], 8_192)
             self.assertEqual(len(asyncio.run(jobs.list_after(job.job_id))), 10)
+            stream = asyncio.run(model_streams.snapshot(job.job_id))
+            self.assertEqual(
+                {
+                    event.stage
+                    for event in stream.events
+                    if event.text
+                },
+                {"CLAIM_DRAFT", "TASK_PLAN", "TASK_OUTPUT"},
+            )
+            self.assertTrue(
+                asyncio.run(
+                    artifacts.list_relative_paths(job.job_id, "claim-drafts")
+                )
+            )
             published = output_root / "runs" / job.job_id
             self.assertTrue((published / "documents/generated.md").is_file())
             self.assertTrue((published / "_reports/comparison.json").is_file())
@@ -309,7 +364,13 @@ class LocalDocumentJobPipelineTest(unittest.TestCase):
             )
             self.assertEqual(publish_result["run_id"], job.job_id)
             checkpoints = FilesystemJobCheckpointInspector(
-                artifacts, evidence, claims, plans, results, finals
+                artifacts,
+                evidence,
+                claims,
+                plans,
+                results,
+                finals,
+                claim_drafts,
             )
             inspected = {
                 item.checkpoint_id: item

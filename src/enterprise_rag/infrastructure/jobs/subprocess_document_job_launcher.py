@@ -5,6 +5,7 @@ import fcntl
 import os
 import subprocess
 import sys
+import threading
 from contextlib import suppress
 from pathlib import Path
 from typing import BinaryIO
@@ -129,4 +130,17 @@ class SubprocessDocumentJobLauncher:
                 start_new_session=True,
                 env=os.environ.copy(),
             )
+        reaper = threading.Thread(
+            target=self._reap,
+            args=(process,),
+            name=f"rag-worker-reaper-{job_id}",
+            daemon=True,
+        )
+        with suppress(RuntimeError):
+            reaper.start()
         return int(process.pid)
+
+    @staticmethod
+    def _reap(process: subprocess.Popen[bytes]) -> None:
+        with suppress(OSError, subprocess.SubprocessError):
+            process.wait()

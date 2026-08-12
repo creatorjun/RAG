@@ -772,10 +772,51 @@ class JobDashboardDto:
     events: tuple[ProgressEventDto, ...]
     checkpoints: tuple[JobCheckpointDto, ...]
     runner: RunnerStatusDto | None
+    model_stream: ModelStreamSnapshotDto
 ```
 
 체크포인트 상태는 `MISSING`, `SAVED`, `IN_PROGRESS`, `INVALID`다. `SAVED`는 파일 존재가 아니라
-schema·Job ID·digest 검증 성공을 뜻한다. GUI는 이 DTO만 렌더링한다.
+schema·Job ID·digest 검증 성공을 뜻한다. Claim draft checkpoint는 처리한 Evidence 수를
+`IN_PROGRESS`로 노출하고 한 건 이상이면 재개할 수 있다. GUI는 이 DTO만 렌더링한다.
+
+```python
+class ModelStreamEventKind(StrEnum):
+    STARTED = "STARTED"
+    DELTA = "DELTA"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+
+
+@dataclass(frozen=True, slots=True)
+class ModelStreamEventDto:
+    job_id: str
+    sequence: int
+    generation_id: str
+    stage: str
+    kind: ModelStreamEventKind
+    text: str
+    occurred_at: datetime
+    error_code: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class ModelStreamSnapshotDto:
+    events: tuple[ModelStreamEventDto, ...]
+    latest_sequence: int
+    truncated: bool
+
+
+class ModelStreamRepositoryPort(Protocol):
+    def next_sequence(self, job_id: str) -> int: ...
+    def append(self, event: ModelStreamEventDto) -> None: ...
+    async def snapshot(
+        self, job_id: str, limit: int = 1_000
+    ) -> ModelStreamSnapshotDto: ...
+```
+
+`DELTA`만 최대 4,096자의 `text`를 가지며 실패 event만 안전한 `error_code`를 가진다. 이 stream은
+검증 전 관측 계약이고 구조화 생성 결과 계약이 아니다. 저장·조회 실패는 Job 상태, 체크포인트,
+취소 제어를 가리지 않아야 한다.
 
 ```python
 class DocumentJobLauncherPort(Protocol):
@@ -906,7 +947,8 @@ class CancellationToken(Protocol):
 3. Worker의 signal guard가 thread-safe cancellation token을 설정하고 `cancellation_grace_seconds`
    watchdog을 시작한다. 별도 확인 작업은 Job을 `CANCELLED`로 전이한다.
 4. `MlxTextGenerator`는 `stream_generate`의 각 토큰 조각 전후에 token을 검사한다. 취소된 부분 출력은
-   Task 결과나 게시 문서로 저장하지 않는다.
+   Task 결과나 게시 문서로 저장하지 않는다. 관측용 `DELTA`는 검증 전 표시를 위해 Job 내부에 남을
+   수 있다.
 5. 정상 반환 시 watchdog을 해제하고 runner lease를 `EXITED`로 닫는다. 유예를 넘기면 Worker 자신이
    자기 process group에만 `SIGKILL`을 보내며, 완료된 write-once 체크포인트는 유지한다.
 

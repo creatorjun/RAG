@@ -33,8 +33,10 @@ class _Generator:
     ) -> None:
         self.wrong_evidence = wrong_evidence
         self.irrelevant_paths = irrelevant_paths
+        self.calls: list[str] = []
 
     async def generate(self, evidence, instruction):
+        self.calls.append(evidence.evidence_id)
         if evidence.relative_path in self.irrelevant_paths:
             return ()
         evidence_id = (
@@ -105,6 +107,48 @@ class ExtractClaimDraftsTest(unittest.TestCase):
                 )
             )
         self.assertEqual(captured.exception.code, "CLAIM_LEDGER_INVALID")
+
+    def test_resumes_from_each_persisted_evidence_checkpoint(self) -> None:
+        first = _evidence("a", "one.md")
+        second = _evidence("b", "two.md")
+        evidence = EvidenceBundleDto((first, second), 2, 2)
+        saved = (
+            ClaimDraftDto(
+                f"draft:{first.chunk_id}",
+                ClaimKind.FACT,
+                "저장된 사실",
+                (first.evidence_id,),
+            ),
+        )
+
+        class Repository:
+            def __init__(self) -> None:
+                self.values = {("job-" + "1" * 32, first.evidence_id): saved}
+                self.saved: list[str] = []
+
+            async def load(self, job_id: str, evidence_id: str):
+                return self.values.get((job_id, evidence_id))
+
+            async def save(self, job_id: str, evidence_id: str, drafts):
+                self.values[(job_id, evidence_id)] = drafts
+                self.saved.append(evidence_id)
+                return f"claim-drafts/{evidence_id[-64:]}.json"
+
+        generator = _Generator()
+        repository = Repository()
+        job_id = "job-" + "1" * 32
+
+        drafts = asyncio.run(
+            ExtractClaimDrafts(generator, repository).execute(
+                evidence,
+                "통합 문서 작성",
+                job_id=job_id,
+            )
+        )
+
+        self.assertEqual(len(drafts), 2)
+        self.assertEqual(generator.calls, [second.evidence_id])
+        self.assertEqual(repository.saved, [second.evidence_id])
 
 
 if __name__ == "__main__":

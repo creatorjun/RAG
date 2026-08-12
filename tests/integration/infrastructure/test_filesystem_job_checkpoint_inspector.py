@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from enterprise_rag.application.dto.claims import ClaimDto, ClaimLedgerDto
+from enterprise_rag.application.dto.claims import ClaimDraftDto, ClaimDto, ClaimLedgerDto
 from enterprise_rag.application.dto.evidence import EvidenceBundleDto, EvidenceItemDto
 from enterprise_rag.application.dto.job_dashboard import CheckpointStatus
 from enterprise_rag.application.dto.jobs import CreateDocumentJobDto
@@ -24,6 +24,9 @@ from enterprise_rag.application.dto.tasks import (
 )
 from enterprise_rag.domain.claims import ClaimKind
 from enterprise_rag.domain.jobs import DocumentJob
+from enterprise_rag.infrastructure.jobs.filesystem_claim_draft_repository import (
+    FilesystemClaimDraftRepository,
+)
 from enterprise_rag.infrastructure.jobs.filesystem_claim_ledger_repository import (
     FilesystemClaimLedgerRepository,
 )
@@ -54,6 +57,7 @@ class FilesystemJobCheckpointInspectorTest(unittest.TestCase):
             artifacts = FilesystemJobArtifactRepository(root / "var")
             evidence_repository = FilesystemEvidenceRepository(artifacts)
             claim_repository = FilesystemClaimLedgerRepository(artifacts)
+            claim_draft_repository = FilesystemClaimDraftRepository(artifacts)
             plan_repository = FilesystemTaskPlanRepository(artifacts)
             result_repository = FilesystemTaskResultRepository(artifacts)
             final_repository = FilesystemFinalDocumentRepository(artifacts)
@@ -64,6 +68,7 @@ class FilesystemJobCheckpointInspectorTest(unittest.TestCase):
                 plan_repository,
                 result_repository,
                 final_repository,
+                claim_draft_repository,
             )
             job = DocumentJob("job-" + "a" * 32)
             asyncio.run(
@@ -157,6 +162,20 @@ class FilesystemJobCheckpointInspectorTest(unittest.TestCase):
                 1,
             )
             asyncio.run(evidence_repository.save(job.job_id, evidence))
+            asyncio.run(
+                claim_draft_repository.save(
+                    job.job_id,
+                    evidence_id,
+                    (
+                        ClaimDraftDto(
+                            "draft:chunk:1",
+                            ClaimKind.FACT,
+                            "사실",
+                            (evidence_id,),
+                        ),
+                    ),
+                )
+            )
             asyncio.run(claim_repository.save(job.job_id, ledger))
             asyncio.run(plan_repository.save(job.job_id, plan))
             asyncio.run(result_repository.save_output(job.job_id, 1, output))
@@ -174,6 +193,7 @@ class FilesystemJobCheckpointInspectorTest(unittest.TestCase):
             }
             for checkpoint_id in (
                 "evidence",
+                "claim_drafts",
                 "claim_ledger",
                 "task_plan",
                 "task_attempts",

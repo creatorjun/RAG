@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import cast
 
 from enterprise_rag.application.dto.jobs import DocumentJobDto
+from enterprise_rag.application.dto.model_stream import ModelStreamSnapshotDto
 from enterprise_rag.application.dto.progress import ProgressEventDto
 from enterprise_rag.application.dto.runner import RunnerStatusDto
 
@@ -45,6 +46,9 @@ class JobDashboardDto:
     events: tuple[ProgressEventDto, ...]
     checkpoints: tuple[JobCheckpointDto, ...]
     runner: RunnerStatusDto | None = None
+    model_stream: ModelStreamSnapshotDto = field(
+        default_factory=ModelStreamSnapshotDto
+    )
 
     def __post_init__(self) -> None:
         sequences = [event.sequence for event in self.events]

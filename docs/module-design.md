@@ -490,3 +490,17 @@ AppleScript와 제한된 환경 변수만 사용하며, 결과를 `DELIVERED` �
 - 원본 경로·리비전·문자 범위·내용 해시와 Evidence ID 보존
 - Evidence bundle write-once와 schema 재검증
 - Derived·Control 산출물 저장 금지
+
+#### `FilesystemClaimDraftRepository`
+
+- `claim-drafts/<evidence_sha256>.json`을 Evidence 단위 write-once로 저장
+- 빈 draft 배열도 검토 완료 체크포인트로 보존
+- Job·Evidence identity와 모든 draft의 단일 Evidence 참조를 다시 검증
+
+#### `ObservedTextGenerator`와 `FilesystemModelStreamRepository`
+
+- 공용 `TextGeneratorPort`를 장식하고 모델 구현이 제공하는 생성 조각 callback을 관측
+- 128자 또는 줄바꿈 경계로 묶은 `DELTA`와 시작·완료·실패 event를 기록
+- Job별 `runtime/model-stream.jsonl`과 file lock으로 sequence를 직렬화
+- 관측 저장 실패가 유효한 모델 결과를 실패시키지 않도록 분리
+- Dashboard에는 최근 1,000 event와 생략 여부만 반환

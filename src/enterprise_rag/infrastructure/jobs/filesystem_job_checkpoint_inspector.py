@@ -6,6 +6,9 @@ from enterprise_rag.application.dto.job_dashboard import (
     CheckpointStatus,
     JobCheckpointDto,
 )
+from enterprise_rag.application.ports.claim_draft_repository import (
+    ClaimDraftRepositoryPort,
+)
 from enterprise_rag.application.ports.claim_ledger_repository import (
     ClaimLedgerRepositoryPort,
 )
@@ -25,6 +28,7 @@ _ATTEMPT_PATH = re.compile(
     r"(output|validation)\.json$"
 )
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+_CLAIM_DRAFT_PATH = re.compile(r"^claim-drafts/([0-9a-f]{64})\.json$")
 
 
 class FilesystemJobCheckpointInspector:
@@ -36,6 +40,7 @@ class FilesystemJobCheckpointInspector:
         plans: TaskPlanRepositoryPort,
         results: TaskResultRepositoryPort,
         finals: FinalDocumentRepositoryPort,
+        claim_drafts: ClaimDraftRepositoryPort | None = None,
     ) -> None:
         self._artifacts = artifacts
         self._evidence = evidence
@@ -43,12 +48,14 @@ class FilesystemJobCheckpointInspector:
         self._plans = plans
         self._results = results
         self._finals = finals
+        self._claim_drafts = claim_drafts
 
     async def inspect(self, job_id: str) -> tuple[JobCheckpointDto, ...]:
         return (
             await self._definition(job_id),
             await self._source_manifest(job_id),
             await self._evidence_checkpoint(job_id),
+            await self._claim_drafts_checkpoint(job_id),
             await self._claim_checkpoint(job_id),
             await self._task_plan_checkpoint(job_id),
             await self._task_attempts_checkpoint(job_id),
@@ -142,6 +149,60 @@ class FilesystemJobCheckpointInspector:
             )
         except ApplicationError as error:
             return self._from_error("claim_ledger", "Claim Ledger", path, error)
+
+    async def _claim_drafts_checkpoint(self, job_id: str) -> JobCheckpointDto:
+        path = "claim-drafts/"
+        try:
+            paths = await self._artifacts.list_relative_paths(job_id, "claim-drafts")
+            evidence = await self._evidence.load(job_id)
+        except ApplicationError as error:
+            return self._from_error("claim_drafts", "Claim 추출", path, error)
+        if not paths:
+            return self._missing("claim_drafts", "Claim 추출", path)
+        expected_digests = {
+            item.evidence_id.removeprefix("evidence:sha256:")
+            for item in evidence.items
+        }
+        digests: set[str] = set()
+        try:
+            for relative_path in paths:
+                match = _CLAIM_DRAFT_PATH.fullmatch(relative_path)
+                if (
+                    match is None
+                    or match.group(1) in digests
+                    or match.group(1) not in expected_digests
+                ):
+                    raise ValueError("claim draft path is invalid")
+                digest = match.group(1)
+                digests.add(digest)
+                if self._claim_drafts is not None:
+                    await self._claim_drafts.load(
+                        job_id,
+                        "evidence:sha256:" + digest,
+                    )
+        except (ApplicationError, ValueError):
+            return self._invalid("claim_drafts", "Claim 추출", path)
+        completed = len(digests)
+        total = len(evidence.items)
+        if completed > total or not digests.issubset(expected_digests):
+            return self._invalid("claim_drafts", "Claim 추출", path)
+        if completed < total:
+            return JobCheckpointDto(
+                "claim_drafts",
+                "Claim 추출",
+                path,
+                CheckpointStatus.IN_PROGRESS,
+                completed,
+                completed > 0,
+                f"Evidence {completed}/{total}건 저장 · 중단 시 여기부터 재개",
+            )
+        return self._saved(
+            "claim_drafts",
+            "Claim 추출",
+            path,
+            completed,
+            f"Evidence {completed}/{total}건 추출 완료",
+        )
 
     async def _task_plan_checkpoint(self, job_id: str) -> JobCheckpointDto:
         path = "control/task-plan.json"

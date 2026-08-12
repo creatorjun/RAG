@@ -10,6 +10,11 @@ from enterprise_rag.application.dto.job_dashboard import (
     JobDashboardDto,
 )
 from enterprise_rag.application.dto.jobs import DocumentJobDto
+from enterprise_rag.application.dto.model_stream import (
+    ModelStreamEventDto,
+    ModelStreamEventKind,
+    ModelStreamSnapshotDto,
+)
 from enterprise_rag.application.dto.progress import ProgressEventDto
 from enterprise_rag.application.dto.runner import (
     RunnerHealth,
@@ -18,7 +23,7 @@ from enterprise_rag.application.dto.runner import (
     RunnerStatusDto,
 )
 from enterprise_rag.application.use_cases.get_job_dashboard import GetJobDashboard
-from enterprise_rag.domain.errors import ApplicationError
+from enterprise_rag.domain.errors import ApplicationError, revision_error
 from enterprise_rag.domain.jobs import DocumentJob
 
 
@@ -66,6 +71,17 @@ class _Clock:
         return self.value
 
 
+class _Streams:
+    def __init__(self, value=None, error: bool = False) -> None:
+        self.value = value
+        self.error = error
+
+    async def snapshot(self, job_id: str, limit: int = 1_000):
+        if self.error:
+            raise revision_error("IO_FAILURE")
+        return self.value
+
+
 class JobDashboardTest(unittest.TestCase):
     def test_combines_job_events_and_checkpoint_state(self) -> None:
         job = DocumentJob("job-" + "a" * 32)
@@ -75,6 +91,40 @@ class JobDashboardTest(unittest.TestCase):
         self.assertEqual(dashboard.job.job_id, job.job_id)
         self.assertEqual(dashboard.events[0].sequence, 1)
         self.assertEqual(dashboard.checkpoints[0].status, CheckpointStatus.SAVED)
+
+    def test_includes_live_model_stream_without_making_it_a_dashboard_dependency(
+        self,
+    ) -> None:
+        job = DocumentJob("job-" + "9" * 32)
+        event = ModelStreamEventDto(
+            job.job_id,
+            1,
+            "generation-" + "8" * 32,
+            "CLAIM_DRAFT",
+            ModelStreamEventKind.STARTED,
+            "",
+            datetime(2026, 8, 12, tzinfo=timezone.utc),
+        )
+        snapshot = ModelStreamSnapshotDto((event,), 1)
+        dashboard = asyncio.run(
+            GetJobDashboard(
+                _Jobs(job),
+                _Events(),
+                _Checkpoints(),
+                model_streams=_Streams(snapshot),
+            ).execute(job.job_id)
+        )
+        self.assertEqual(dashboard.model_stream, snapshot)
+
+        degraded = asyncio.run(
+            GetJobDashboard(
+                _Jobs(job),
+                _Events(),
+                _Checkpoints(),
+                model_streams=_Streams(error=True),
+            ).execute(job.job_id)
+        )
+        self.assertEqual(degraded.model_stream, ModelStreamSnapshotDto())
 
     def test_classifies_healthy_and_stale_runner_from_heartbeat_age(self) -> None:
         job = DocumentJob("job-" + "d" * 32)

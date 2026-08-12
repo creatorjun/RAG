@@ -26,7 +26,7 @@ BGE-M3, FAISS, 파서 의존성은 대상 Mac 실측과 라이선스 검토가 �
 | --- | --- |
 | Domain | 오류·값 객체, 리비전 상태, DocumentJob 상태 머신·진행 불변 조건 |
 | Application | revision·Job·모델 카탈로그 관리, Evidence·Claim·Task 계획/실행/검증, 결정적 조립과 최종 품질 게이트, 실행 계약·공통 취소/알림 정책 |
-| Infrastructure | 설정 loader, Hugging Face 카탈로그, MLX·구조화 생성 어댑터, SQLite Job/Event, write-once Job·Task·최종 게이트 저장소, mutable runner lease, 폴더 workspace |
+| Infrastructure | 설정 loader, Hugging Face 카탈로그, MLX·구조화 생성·stream 관측 어댑터, SQLite Job/Event, write-once Job·Claim draft·Task·최종 게이트 저장소, mutable runner lease, 폴더 workspace |
 | Presentation | Application 실행 계약만 받는 `rag` controller, Job Worker controller, `rag-gui` View/ViewModel |
 | Composition | `bootstrap.py` 단일 구체 조립 지점, Presentation factory 주입과 명시적 close 경계 |
 
@@ -60,13 +60,13 @@ Application→Infrastructure/Presentation, Presentation→Bootstrap/Infrastructu
 | M1-06 | 완료 | AST import 경계 테스트 | CI 실행 환경 연결 |
 | M1-07 | 완료 | 프로젝트 리비전 스킬이 애플리케이션 코드 호출 | 공식 validator 재실행 |
 | M1-16 | 완료 | `DocumentJobState`, 허용 전이·terminal·단조 진행 불변 조건 | 없음 |
-| M1-17 | 부분 완료 | `ProgressEventDto`, SQLite 원자 이벤트·counter, CLI 조회, GUI 2초 polling | 백그라운 구독·대규모 event paging |
+| M1-17 | 부분 완료 | `ProgressEventDto`, SQLite 원자 이벤트·counter, Job별 모델 stream journal, GUI 2초 polling | 백그라운 구독·대규모 event paging |
 | M1-18 | 완료 | 파일 Job 저장소, 원자 초기화, write-once JSON, path/link guard | 없음 |
 | M1-19 | 완료 | checksum migration, Job CAS, Event·counter 원자 commit, 재개 조회 | 없음 |
-| M1-22 | 완료 | 파일 lock+runner token 소유권, PID claim, 5초 heartbeat, 3회 누락 stale 판정, launch sequence 회수 | 없음 |
+| M1-22 | 완료 | 파일 lock+runner token 소유권, PID claim, 5초 heartbeat, 3회 누락 stale 판정, launch sequence 회수, 자식 process reaper | 없음 |
 | M1-24 | 완료 | 고정 10단계 실제 어댑터, Job별 subprocess, event 기반 멱등 재개, SIGTERM·토큰 경계 즉시 취소·15초 watchdog 강제 종료 | 없음 |
 | M5-02 | 부분 완료 | text chunk Evidence DTO, 결정 ID, 100% 배정 검사, 전용 파일 저장소 | parser 구조 요소·ACL Evidence |
-| M5-03 | 완료 | Evidence 제한 Claim 추출, 결정 ID, 동일 내용·다중 Evidence 병합, Ledger 저장소 | 없음 |
+| M5-03 | 완료 | Evidence 제한 Claim 추출, Evidence별 write-once partial 재개, 결정 ID, 동일 내용·다중 Evidence 병합, Ledger 저장소 | 없음 |
 | M5-04 | 부분 완료 | 구조화 관계 판정, compact Claim ref, context 초과 시 원본·전체 유사 순서·종류별 40-Claim 겹침 batch, known-pair·중복·상충 pair 검증, conflict 전달 | 대규모 평가 기반 후보 recall 보정 |
 | M5-05 | 완료 | Claim 단일 소유, Evidence 100% Coverage, 순환 없는 고정 Task DAG | 없음 |
 | M5-06 | 완료 | TaskPacket·TaskOutput strict 계약과 write-once attempt 저장 | 없음 |
@@ -79,7 +79,7 @@ Application→Infrastructure/Presentation, Presentation→Bootstrap/Infrastructu
 | M1-43 | 완료 | prepare·compare·finalize CLI와 인수 테스트 | 운영 승인 UI 연동 |
 | M6-20 | 부분 완료 | 기존 `presentation` 내 PySide6 shell, 공통 시각 체계, macOS 독립 application palette, 스크롤 기반 실행·설정 화면, `rag-gui`, headless import·종료 smoke | 단일 instance·macOS packaging |
 | M6-21 | 부분 완료 | 실행/설정 탭, 로컬/원격 HF 카탈로그, exact commit·cache·MLX/메모리 적합성, dry-run 디스크 검사, 다운로드 건수·바이트 진행/취소, snapshot 재검증, prompt 설정 CAS | 실측 benchmark 승인 |
-| M6-22 | 부분 완료 | GUI 시작/재개, 10단계 event, manifest~게시 run 무결성 체크포인트, PID·heartbeat 건강 상태 | 대규모 event paging |
+| M6-22 | 부분 완료 | GUI 시작/재개, 10단계 event, Evidence별 Claim 건수·30~39% 진행률, 검증 전 LLM 실시간 stream, manifest~게시 run 무결성 체크포인트, PID·heartbeat 건강 상태 | 대규모 event paging |
 | M6-23 | 완료 | 최종 문서·품질 JSON·비교 Markdown·합성 JSON 경로와 해시 재검증, coverage·비교 건수 GUI, 안전한 파일 열기 | 없음 |
 | M6-24 | 완료 | Job snapshot 알림 정책, publication fingerprint 선점 영수증, Worker+GUI 중복 차단, macOS adapter, 전달 상태 GUI | 없음 |
 
@@ -87,11 +87,11 @@ Application→Infrastructure/Presentation, Presentation→Bootstrap/Infrastructu
 
 | 검사 | 결과 |
 | --- | --- |
-| pytest | 227 passed, 135 subtests passed |
-| branch coverage | 85.16%, 기준 85% 통과 |
+| pytest | 240 passed, 147 subtests passed |
+| branch coverage | 85.15%, 기준 85% 통과 |
 | 프로젝트 스킬 unittest | 4 passed |
 | Ruff | 통과 |
-| mypy strict | 148 source files 통과 |
+| mypy strict | 154 source files 통과 |
 | 아키텍처 import 경계 | Domain/Application/Infrastructure/Presentation 위반 0건, Job stage 구체 어댑터 import 0건 |
 | editable package 설치 | 성공, `rag` 콘솔 스크립트 생성 |
 | PySide6 GUI smoke | offscreen 2탭·macOS 고정 palette·오류 대비·중복 실행 차단·모델 카탈로그·다운로드 진행·Worker 취소·결과 품질·알림 상태 생성과 정상 종료, `rag-gui --help` 성공 |
@@ -121,6 +121,8 @@ Application→Infrastructure/Presentation, Presentation→Bootstrap/Infrastructu
 ### 3.2 ADR-0006 Evidence·Task 경로
 
 - Evidence 하나씩 구조화 Claim을 추출하며 다른 Evidence ID 참조와 불완전 JSON을 거부한다.
+- 유효한 Claim 배열은 빈 배열을 포함해 Evidence별 파일에 즉시 저장한다. 실패 복구는 저장되지 않은
+  첫 Evidence부터 이어지며 체크포인트 건수를 GUI에 표시한다.
 - 표현과 운영 세부가 동일한 Claim은 원본이 달라도 하나로 병합하고 모든 Evidence를 유지한다.
 - 관계 판정기는 의미 있는 관계만 제안하고 코드는 알 수 없는 Claim, 중복 pair, `UNRELATED`
   출력을 거부한다.
@@ -156,7 +158,8 @@ Application→Infrastructure/Presentation, Presentation→Bootstrap/Infrastructu
   commit 경로, config, 가중치와 cache catalog를 재검증한다. 실패·취소 snapshot은 Job에 쓰지 않는다.
 - Job 취소는 SQLite `CANCELLING` 선행, runner lease·process group 검증, `SIGTERM`, MLX
   `stream_generate` token 경계 취소 순서로 처리한다. Worker가 15초 안에 정상 종료하지 않으면
-  자기 process group만 `SIGKILL`하며 부분 모델 출력은 저장하거나 게시하지 않는다.
+  자기 process group만 `SIGKILL`한다. 미완성 구조 결과는 Task 결과나 게시 문서로 저장하지 않지만
+  사용자가 요청한 진단용 생성 조각은 `runtime/model-stream.jsonl`에 검증 전 상태로 남을 수 있다.
 - 게시 결과 reader는 최종 문서·비교 JSON·Markdown·합성 JSON과 품질 보고서의 경계, schema,
   건수와 SHA-256을 재검증한다. 실행 탭은 coverage와 비교 건수, 검증된 파일 열기를 제공한다.
 - 완료 Worker와 GUI recovery는 같은 publication fingerprint receipt를 사용한다. 한 호출자만

@@ -11,6 +11,10 @@
 | `after/runs/<run_id>/documents/` | 신규 실행의 수정 후 문서 | 해당 실행 finalization 전 읽기·신규 쓰기 허용 |
 | `after/runs/<run_id>/_reports/` | 입력 매니페스트, 비교 결과, unified diff | 준비·비교 도구만 쓰기 허용 |
 
+Worker는 시작 시 `after/` 루트가 없으면 생성해 링크·중첩·쓰기 경계를 먼저 검증한다. 이때
+`runs/<run_id>`이나 결과 파일은 만들지 않으며, 검증된 최종 품질 게이트를 통과한 게시 단계에서만
+신규 run을 원자적으로 노출한다.
+
 Confluence를 포함한 원본 시스템 내보내기는 이 경계 밖에서 수행한다. AI에는 Confluence API 키, access token, cookie, 로그인 세션을 제공하지 않는다.
 
 ## 처리 흐름

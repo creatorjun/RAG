@@ -19,6 +19,9 @@ from enterprise_rag.application.ports.cancellation import CancellationTokenPort
 from enterprise_rag.application.ports.claim_draft_generator import (
     ClaimDraftGeneratorPort,
 )
+from enterprise_rag.application.ports.claim_draft_repository import (
+    ClaimDraftRepositoryPort,
+)
 from enterprise_rag.application.ports.claim_ledger_repository import (
     ClaimLedgerRepositoryPort,
 )
@@ -81,6 +84,7 @@ _CLAIM_DRAFT_OUTPUT_CAP = 2_048
 _CLAIM_RELATION_OUTPUT_CAP = 2_048
 _TASK_PLAN_OUTPUT_CAP = 4_096
 ModelFactory = Callable[[StoredDocumentJobDefinitionDto], TextGeneratorPort]
+ObservedGeneratorFactory = Callable[[TextGeneratorPort, str, str], TextGeneratorPort]
 ClaimDraftGeneratorFactory = Callable[
     [TextGeneratorPort, int, str], ClaimDraftGeneratorPort
 ]
@@ -134,10 +138,12 @@ class LocalDocumentJobStages:
         finals: FinalDocumentRepositoryPort,
         chunking: ChunkingConfigDto,
         *,
+        claim_drafts: ClaimDraftRepositoryPort | None = None,
         chunker: LongDocumentChunkerPort,
         source_factory: SourceFactory,
         workspace_factory: WorkspaceFactory,
         model_factory: ModelFactory,
+        observed_generator_factory: ObservedGeneratorFactory | None = None,
         claim_draft_generator_factory: ClaimDraftGeneratorFactory,
         claim_relation_generator_factory: ClaimRelationGeneratorFactory,
         task_definition_generator_factory: TaskDefinitionGeneratorFactory,
@@ -149,6 +155,7 @@ class LocalDocumentJobStages:
         self._definitions = definitions
         self._evidence = evidence
         self._claims = claims
+        self._claim_drafts = claim_drafts
         self._plans = plans
         self._results = results
         self._finals = finals
@@ -157,6 +164,11 @@ class LocalDocumentJobStages:
         self._source_factory = source_factory
         self._workspace_factory = workspace_factory
         self._model_factory = model_factory
+        self._observed_generator_factory = (
+            observed_generator_factory
+            if observed_generator_factory is not None
+            else lambda generator, _job_id, _stage: generator
+        )
         self._claim_draft_generator_factory = claim_draft_generator_factory
         self._claim_relation_generator_factory = claim_relation_generator_factory
         self._task_definition_generator_factory = task_definition_generator_factory
@@ -203,11 +215,17 @@ class LocalDocumentJobStages:
         execution = definition.request.execution_settings
         if execution is None:
             raise revision_error("JOB_DEFINITION_INVALID", {"job_id": job_id})
+        self._prepare_output_root(
+            Path(definition.request.source_root),
+            Path(execution.output_root),
+        )
         generator = self._model_factory(definition)
         output_budget = execution.max_output_tokens
         additional = execution.additional_system_prompt
         result_writer = self._task_output_generator_factory(
-            generator, output_budget, additional
+            self._observed_generator_factory(generator, job_id, "TASK_OUTPUT"),
+            output_budget,
+            additional,
         )
         attempts = ExecuteTaskAttempt(
             result_writer,
@@ -223,17 +241,22 @@ class LocalDocumentJobStages:
             ),
             extract_claims=ExtractClaimDrafts(
                 self._claim_draft_generator_factory(
-                    generator,
+                    self._observed_generator_factory(generator, job_id, "CLAIM_DRAFT"),
                     min(output_budget, _CLAIM_DRAFT_OUTPUT_CAP),
                     additional,
-                )
+                ),
+                self._claim_drafts,
             ),
             build_claims=BuildReviewedClaimLedger(
                 # Claim drafts already reflect the user's extraction scope. Repeating
                 # the final-document formatting prompt here only consumes relation
                 # context and cannot change the fixed relation JSON contract.
                 self._claim_relation_generator_factory(
-                    generator,
+                    self._observed_generator_factory(
+                        generator,
+                        job_id,
+                        "CLAIM_RELATION",
+                    ),
                     min(output_budget, _CLAIM_RELATION_OUTPUT_CAP),
                     "",
                 ),
@@ -241,7 +264,7 @@ class LocalDocumentJobStages:
             ),
             plan_tasks=PlanDocumentTasks(
                 self._task_definition_generator_factory(
-                    generator,
+                    self._observed_generator_factory(generator, job_id, "TASK_PLAN"),
                     min(output_budget, _TASK_PLAN_OUTPUT_CAP),
                     additional,
                 ),
@@ -250,6 +273,50 @@ class LocalDocumentJobStages:
         )
         self._runtimes[job_id] = runtime
         return runtime
+
+    @staticmethod
+    def _prepare_output_root(source_root: Path, output_root: Path) -> None:
+        try:
+            absolute_source = source_root.expanduser().absolute()
+            absolute_output = output_root.expanduser().absolute()
+            resolved_source = source_root.expanduser().resolve(strict=True)
+            existing_parent = absolute_output
+            while not existing_parent.exists():
+                existing_parent = existing_parent.parent
+            resolved_parent = existing_parent.resolve(strict=True)
+        except OSError as error:
+            raise revision_error("IO_FAILURE") from error
+        if (
+            absolute_source != resolved_source
+            or existing_parent != resolved_parent
+        ):
+            raise revision_error("LINK_NOT_ALLOWED")
+        if not resolved_source.is_dir() or not resolved_parent.is_dir():
+            raise revision_error("IO_FAILURE")
+        projected_output = resolved_parent.joinpath(
+            *absolute_output.relative_to(existing_parent).parts
+        )
+        if LocalDocumentJobStages._paths_overlap(resolved_source, projected_output):
+            raise revision_error("BEFORE_AFTER_OVERLAP")
+        try:
+            absolute_output.mkdir(parents=True, exist_ok=True)
+            resolved_output = absolute_output.resolve(strict=True)
+        except OSError as error:
+            raise revision_error("IO_FAILURE") from error
+        if absolute_output != resolved_output:
+            raise revision_error("LINK_NOT_ALLOWED")
+
+    @staticmethod
+    def _paths_overlap(first: Path, second: Path) -> bool:
+        try:
+            first.relative_to(second)
+            return True
+        except ValueError:
+            try:
+                second.relative_to(first)
+                return True
+            except ValueError:
+                return False
 
     async def _inspect(self, job_id: str) -> JobStageResultDto:
         runtime = await self._runtime(job_id)
@@ -318,7 +385,11 @@ class LocalDocumentJobStages:
         runtime = await self._runtime(job_id)
         evidence = await self._evidence.load(job_id)
         instruction = runtime.definition.request.instruction
-        drafts = await runtime.extract_claims.execute(evidence, instruction)
+        drafts = await runtime.extract_claims.execute(
+            evidence,
+            instruction,
+            job_id=job_id,
+        )
         ledger = await runtime.build_claims.execute(evidence, drafts, instruction)
         await self._claims.save(job_id, ledger)
         return JobStageResultDto(

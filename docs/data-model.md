@@ -36,6 +36,12 @@ var/
 │   ├── metadata.sqlite3
 │   ├── metadata.sqlite3-wal
 │   └── metadata.sqlite3-shm
+├── jobs/
+│   └── <job_id>/
+│       ├── claim-drafts/
+│       │   └── <evidence_sha256>.json
+│       └── runtime/
+│           └── model-stream.jsonl
 ├── indexes/
 │   └── vectors/
 │       └── <generation_id>/
@@ -56,6 +62,10 @@ var/
 ```
 
 CAS object key 형식은 `sha256/ab/cd/<64-hex>`다. 경로 입력은 object key 생성기만 만들며 외부 입력을 직접 연결하지 않는다.
+
+`claim-drafts`는 관련 Claim이 없는 Evidence의 빈 배열도 저장하는 Evidence 단위 write-once 재개
+경계다. `model-stream.jsonl`은 생성 ID와 단조 sequence를 갖는 Job 범위 append-only 관측 로그이며,
+그 내용은 구조·근거·품질 검증 전 데이터다. 게시 산출물이나 운영 로그로 자동 복제하지 않는다.
 
 `data/before`는 DB와 CAS 밖의 승인 입력 경계지만 인제스천 즉시 CAS에 불변 스냅샷을 만든다. `data/after` finalized run은 사람이 검토하는 전달 산출물이므로 DB 매니페스트와 함께 백업한다.
 

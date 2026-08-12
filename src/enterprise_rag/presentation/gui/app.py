@@ -26,6 +26,7 @@ from enterprise_rag.application.dto.model_download import (
     ModelDownloadProgressDto,
     ModelDownloadState,
 )
+from enterprise_rag.application.dto.model_stream import ModelStreamEventKind
 from enterprise_rag.application.dto.runner import RunnerHealth
 from enterprise_rag.application.runtime import JobApplication
 from enterprise_rag.domain.errors import ApplicationError, ErrorCategory
@@ -419,6 +420,8 @@ class _DesktopWindow:
         self._result_fields: dict[str, Any] = {}
         self._result_buttons: dict[str, Any] = {}
         self._active_error_code: str | None = None
+        self._rendered_stream_sequence = 0
+        self._rendered_stream_job_id: str | None = None
         self._closing = False
         self._executor = ThreadPoolExecutor(
             max_workers=1,
@@ -1128,6 +1131,28 @@ class _DesktopWindow:
         )
         events_layout.addWidget(self._events)
         detail_tabs.addTab(events_page, "이벤트 타임라인")
+
+        stream_page = self._widgets.QWidget()
+        stream_layout = self._widgets.QVBoxLayout(stream_page)
+        stream_layout.setContentsMargins(0, 8, 0, 0)
+        stream_layout.setSpacing(8)
+        self._model_stream_status = self._label(
+            "모델 생성 대기 중 · 검증 전 임시 출력이며 최종 문서가 아닙니다.",
+            "muted",
+            True,
+        )
+        self._model_stream = self._widgets.QPlainTextEdit()
+        self._model_stream.setReadOnly(True)
+        self._model_stream.setLineWrapMode(
+            self._widgets.QPlainTextEdit.LineWrapMode.WidgetWidth
+        )
+        self._model_stream.setPlaceholderText(
+            "Worker가 새 모델 생성을 시작하면 토큰 문자열이 실시간으로 표시됩니다."
+        )
+        self._model_stream.document().setMaximumBlockCount(5_000)
+        stream_layout.addWidget(self._model_stream_status)
+        stream_layout.addWidget(self._model_stream, 1)
+        detail_tabs.addTab(stream_page, "LLM 실시간 스트림")
         detail_layout.addWidget(detail_tabs)
         layout.addWidget(detail_card)
         scroll.setWidget(canvas)
@@ -1807,8 +1832,9 @@ class _DesktopWindow:
         self._set_tone(self._header_state, tone)
         self._state.setText(job.state.value)
         self._set_tone(self._state, tone)
-        self._progress.setValue(job.last_percentage)
-        self._progress_value.setText(f"{job.last_percentage}%")
+        display_percentage, live_checkpoint = self._live_progress(dashboard)
+        self._progress.setValue(display_percentage)
+        self._progress_value.setText(f"{display_percentage}%")
         if runner_busy:
             self._start_button.setText("파이프라인 실행 중")
         elif job.state is DocumentJobState.FAILED:
@@ -1835,6 +1861,7 @@ class _DesktopWindow:
             not job.state.terminal and job.state is not DocumentJobState.CANCELLING
         )
         self._render_runner(dashboard)
+        self._render_model_stream(dashboard)
         if job.state is DocumentJobState.CANCELLING:
             self._last_message.setText(
                 "취소 처리 중 · 모델 토큰 경계에서 중단한 뒤 체크포인트를 닫는 중입니다. "
@@ -1844,6 +1871,8 @@ class _DesktopWindow:
             self._last_message.setText(
                 "취소 완료 · 완료된 체크포인트는 보존되며 미완성 생성 결과는 게시되지 않습니다."
             )
+        elif live_checkpoint is not None:
+            self._last_message.setText(live_checkpoint)
         elif dashboard.events:
             event = dashboard.events[-1]
             counter = ""
@@ -1894,6 +1923,85 @@ class _DesktopWindow:
                 self._events.setItem(row, column, self._widgets.QTableWidgetItem(value))
         if dashboard.events:
             self._events.scrollToBottom()
+
+    @staticmethod
+    def _live_progress(dashboard: JobDashboardDto) -> tuple[int, str | None]:
+        job = dashboard.job
+        if job.state is not DocumentJobState.BUILDING_CLAIMS:
+            return job.last_percentage, None
+        checkpoints = {
+            checkpoint.checkpoint_id: checkpoint
+            for checkpoint in dashboard.checkpoints
+        }
+        drafts = checkpoints.get("claim_drafts")
+        evidence = checkpoints.get("evidence")
+        if (
+            drafts is None
+            or evidence is None
+            or drafts.item_count is None
+            or evidence.item_count in {None, 0}
+        ):
+            return job.last_percentage, None
+        total = evidence.item_count
+        if total is None:
+            return job.last_percentage, None
+        completed = min(drafts.item_count, total)
+        percentage = min(39, 30 + int(9 * completed / total))
+        if completed == total:
+            detail = (
+                f"Claim 추출 {completed}/{total}건 저장 완료 · "
+                "중복 관계 검증과 병합을 진행 중입니다."
+            )
+        else:
+            detail = (
+                f"Claim 추출 {completed}/{total}건 저장 · "
+                "중단해도 저장된 다음 Evidence부터 재개합니다."
+            )
+        return max(job.last_percentage, percentage), detail
+
+    def _render_model_stream(self, dashboard: JobDashboardDto) -> None:
+        snapshot = dashboard.model_stream
+        if dashboard.job.job_id != self._rendered_stream_job_id:
+            self._model_stream.clear()
+            self._rendered_stream_sequence = 0
+            self._rendered_stream_job_id = dashboard.job.job_id
+        if not snapshot.events:
+            self._model_stream_status.setText(
+                "모델 생성 대기 중 · 검증 전 임시 출력이며 최종 문서가 아닙니다."
+            )
+            self._model_stream.clear()
+            self._rendered_stream_sequence = 0
+            return
+        if snapshot.latest_sequence == self._rendered_stream_sequence:
+            return
+        lines: list[str] = []
+        if snapshot.truncated:
+            lines.append("[이전 스트림 레코드는 화면 표시 한도 때문에 생략됨]\n")
+        for event in snapshot.events:
+            if event.kind is ModelStreamEventKind.DELTA:
+                lines.append(event.text)
+                continue
+            timestamp = event.occurred_at.astimezone().strftime("%H:%M:%S")
+            suffix = "" if event.error_code is None else f" · {event.error_code}"
+            lines.append(
+                f"\n[{timestamp} · {event.stage} · {event.generation_id} · "
+                f"{event.kind.value}{suffix}]\n"
+            )
+        latest = snapshot.events[-1]
+        generation_count = len(
+            {
+                event.generation_id
+                for event in snapshot.events
+                if event.kind is ModelStreamEventKind.STARTED
+            }
+        )
+        self._model_stream_status.setText(
+            f"{latest.stage} · {latest.kind.value} · 생성 {generation_count}건 · "
+            f"stream seq {snapshot.latest_sequence} · 검증 전 임시 출력"
+        )
+        self._model_stream.setPlainText("".join(lines).lstrip())
+        self._model_stream.moveCursor(self._gui.QTextCursor.MoveOperation.End)
+        self._rendered_stream_sequence = snapshot.latest_sequence
 
     @staticmethod
     def _job_tone(state: DocumentJobState) -> str:
@@ -1960,6 +2068,12 @@ class _DesktopWindow:
         self._last_message.setText("이벤트 없음")
         self._checkpoints.setRowCount(0)
         self._events.setRowCount(0)
+        self._model_stream.clear()
+        self._model_stream_status.setText(
+            "모델 생성 대기 중 · 검증 전 임시 출력이며 최종 문서가 아닙니다."
+        )
+        self._rendered_stream_sequence = 0
+        self._rendered_stream_job_id = None
         self._result_status.setText("결과 대기 중")
         self._quality_summary.setText("품질 보고서 대기 중")
         self._comparison_summary.setText("비교 보고서 대기 중")

@@ -104,25 +104,31 @@ Job 시작 시 두 설정을 해석해 불변 snapshot을 만들므로 GUI에서
 - `data/before`의 읽기 전용 루트와 현재 `data/after` run 경계
 - 선택한 원본 폴더의 실행별 불변 스냅샷과 `var/jobs/<job_id>` 아티팩트
 - Claim Ledger, Coverage Matrix, 고정 Task DAG, 단조 증가 진행 이벤트
+- Evidence별 Claim draft 재개 체크포인트와 Job별 검증 전 모델 스트림
 - 게시·비교 디렉터리의 원자적 파일 교체
 - 구조화 로그와 메트릭 수집
 
 Coordinator는 MLX 또는 BGE 모델을 import하거나 적재하지 않는다. 모델 런타임 오류와 Metal 메모리 단편화가 제어 plane에 전파되지 않도록 한다.
 
 Coordinator는 대화 세션을 작업 상태로 간주하지 않는다. Worker 요청은 불변 TaskPacket이며
-결과, attempt, 검증 보고서는 SQLite와 파일 아티팩트에 저장한다. 품질 게이트를 통과하기 전에는
+결과, attempt, 검증 보고서는 SQLite와 파일 아티팩트에 저장한다. Worker는 시작 직후 `after_root`를
+생성해 링크·중첩·쓰기 경계를 조기에 검증하지만, 품질 게이트를 통과하기 전에는
 `data/after/runs`에 게시 run을 준비하지 않는다.
 
 현재 단일 호스트 수직 슬라이스는 Job별 subprocess에 `.runner.lock`을 상속하고 launcher가 발급한
 runner token을 자식 PID가 claim한다. Worker는 `runner-state.json`을 5초마다 원자 갱신한다.
 제어 plane은 3회 누락을 `STALE`로 관측하되 SQLite Job 상태를 추측으로 완료·실패 처리하지 않는다.
 OS가 비정상 종료 프로세스의 lock을 해제한 뒤에만 다음 launcher가 새 launch sequence를 만들 수 있다.
+launcher의 daemon reaper는 종료된 직계 Worker를 즉시 `wait`해 GUI가 살아 있는 동안 zombie
+process가 누적되지 않게 한다.
 
 취소 제어 plane은 먼저 SQLite Job을 `CANCELLING`으로 전이한 후 runner lease의 PID와 독립 process
 group을 교차 검증해 `SIGTERM`을 전달한다. Worker는 신호를 thread-safe token으로 바꾸고 MLX
-`stream_generate`의 토큰 경계에서 부분 출력을 폐기한다. 동시에 Job을 `CANCELLED`로 확인하며,
+`stream_generate`의 토큰 경계에서 구조화 결과 생성을 중단한다. 동시에 Job을 `CANCELLED`로 확인하며,
 15초 안에 체크포인트 정리와 정상 종료가 끝나지 않을 때만 Worker 자체 watchdog이 자기 process
-group을 `SIGKILL`한다. 따라서 GUI나 CLI 프로세스가 먼저 종료되어도 강제 종료 deadline은 유지된다.
+group을 `SIGKILL`한다. 검증되지 않은 관측 문자열은 Job 내부 stream journal에 남을 수 있지만 Task
+결과나 게시 문서로 승격되지 않는다. 따라서 GUI나 CLI 프로세스가 먼저 종료되어도 강제 종료
+deadline은 유지된다.
 
 모델 탐색은 `ModelCatalogPort` 뒤에 둔다. 로컬 cache scan은 네트워크 없이 수행하고, 원격
 Hugging Face 검색은 GUI에서 오프라인 모드를 해제한 뒤 명시적으로 요청할 때만 수행한다.

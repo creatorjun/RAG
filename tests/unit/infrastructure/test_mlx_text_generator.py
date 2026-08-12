@@ -211,6 +211,31 @@ class MlxTextGeneratorTest(unittest.TestCase):
         stream_generate.assert_called_once()
         self.assertIs(stream_generate.call_args.kwargs["sampler"], sampler)
 
+    def test_reports_each_generated_piece_to_stream_observer(self) -> None:
+        generator = _generator()
+        generator._model = object()
+        generator._tokenizer = _FakeTokenizer()
+        modules = {
+            "mlx_lm": SimpleNamespace(
+                stream_generate=Mock(
+                    return_value=iter(
+                        (
+                            SimpleNamespace(text="첫 "),
+                            SimpleNamespace(text="응답"),
+                        )
+                    )
+                )
+            ),
+            "mlx_lm.sample_utils": SimpleNamespace(make_sampler=Mock()),
+        }
+        pieces: list[str] = []
+        with patch("importlib.import_module", side_effect=modules.__getitem__):
+            result = asyncio.run(
+                generator.generate_stream("system", "user", 128, pieces.append)
+            )
+        self.assertEqual(result, "첫 응답")
+        self.assertEqual(pieces, ["첫 ", "응답"])
+
     def test_stops_stream_generation_at_the_next_token_boundary(self) -> None:
         cancellation = ThreadCancellationToken()
         generator = MlxTextGenerator(
