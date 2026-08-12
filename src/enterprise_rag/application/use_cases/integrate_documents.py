@@ -4,7 +4,6 @@ import re
 from collections.abc import Iterable
 
 from enterprise_rag.application.dto.long_document import (
-    ChunkingConfigDto,
     ContextBatchDto,
     LongTextChunkDto,
 )
@@ -18,11 +17,13 @@ from enterprise_rag.application.ports.clock import ClockPort, IdGeneratorPort
 from enterprise_rag.application.ports.document_workspace import DocumentWorkspacePort
 from enterprise_rag.application.ports.long_document import (
     HierarchicalContextPlannerPort,
-    LongDocumentChunkerPort,
-    TextDocumentCollectionPort,
 )
 from enterprise_rag.application.ports.text_generator import TextGeneratorPort
 from enterprise_rag.application.progress import ProgressCallback, ProgressReporter
+from enterprise_rag.application.use_cases.build_evidence_bundle import BuildEvidenceBundle
+from enterprise_rag.application.use_cases.inspect_integration_sources import (
+    InspectIntegrationSources,
+)
 from enterprise_rag.domain.context_budget import TokenBudget
 from enterprise_rag.domain.errors import revision_error
 from enterprise_rag.domain.value_objects import RunId
@@ -40,28 +41,26 @@ _COMPLETION_MARKER = "<!-- ENTERPRISE_RAG_COMPLETE -->"
 class IntegrateDocuments:
     def __init__(
         self,
-        source: TextDocumentCollectionPort,
+        source_inspector: InspectIntegrationSources,
+        evidence_builder: BuildEvidenceBundle,
         workspace: DocumentWorkspacePort,
-        chunker: LongDocumentChunkerPort,
         planner: HierarchicalContextPlannerPort,
         generator: TextGeneratorPort,
         clock: ClockPort,
         id_generator: IdGeneratorPort,
-        chunking_config: ChunkingConfigDto,
         map_budget: TokenBudget,
         reduce_budget: TokenBudget,
         final_max_output_tokens: int,
         item_overhead_tokens: int,
         separator_tokens: int,
     ) -> None:
-        self._source = source
+        self._source_inspector = source_inspector
+        self._evidence_builder = evidence_builder
         self._workspace = workspace
-        self._chunker = chunker
         self._planner = planner
         self._generator = generator
         self._clock = clock
         self._id_generator = id_generator
-        self._chunking_config = chunking_config
         self._map_budget = map_budget
         self._reduce_budget = reduce_budget
         self._final_max_output_tokens = final_max_output_tokens
@@ -75,41 +74,17 @@ class IntegrateDocuments:
         progress: ProgressCallback | None = None,
     ) -> DocumentIntegrationDto:
         reporter = ProgressReporter(progress)
-        reporter.emit(0, "discovering", "원본 문서를 찾는 중")
         validated_run_id = self._validated_run_id(run_id)
-        paths = await self._source.list_relative_paths()
-        if not paths:
-            raise revision_error("NO_TEXT_DOCUMENTS")
-
-        documents = []
-        chunks: list[LongTextChunkDto] = []
-        chunk_sources: dict[str, str] = {}
-        for document_index, path in enumerate(paths, start=1):
-            document = await self._source.read(path)
-            documents.append(document)
-            chunk_set = await self._chunker.chunk(document, self._chunking_config)
-            if not chunk_set.coverage.complete:
-                raise revision_error(
-                    "CHUNK_COVERAGE_FAILED",
-                    {"revision_id": document.revision_id},
-                )
-            for chunk in chunk_set.chunks:
-                chunks.append(chunk)
-                chunk_sources[chunk.chunk_id] = document.relative_path
-            reporter.emit(
-                5 + round(15 * document_index / len(paths)),
-                "reading",
-                "원본 문서를 읽고 청크로 분할하는 중",
-                document_index,
-                len(paths),
-                "documents",
-            )
-        if not chunks:
-            raise revision_error("NO_TEXT_DOCUMENTS")
+        integration_input = await self._source_inspector.execute(reporter)
+        self._evidence_builder.execute(integration_input, reporter)
+        paths = integration_input.relative_paths
+        documents = integration_input.documents
+        chunks = integration_input.chunks
+        chunk_sources = integration_input.chunk_source_by_id
 
         reporter.emit(22, "planning", "모델 처리 계획을 만드는 중")
         plan = self._planner.plan(
-            tuple(chunks),
+            chunks,
             self._map_budget,
             self._reduce_budget,
             self._item_overhead_tokens,

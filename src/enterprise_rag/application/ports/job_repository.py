@@ -12,6 +12,9 @@ class DocumentJobRepositoryPort(Protocol):
     async def get(self, job_id: str) -> DocumentJob | None:
         raise NotImplementedError
 
+    async def list_recent(self, limit: int = 100) -> tuple[DocumentJob, ...]:
+        raise NotImplementedError
+
     async def transition(
         self,
         job_id: str,

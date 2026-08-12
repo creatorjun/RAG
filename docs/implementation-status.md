@@ -3,7 +3,7 @@
 
 - 기준일: 2026-08-12
 - 애플리케이션 버전: `0.1.0`
-- 현재 범위: Milestone 1 기반, 폴더 리비전 최소 수직 슬라이스, ADR-0006 Phase 1
+- 현재 범위: Milestone 1 Job 기반, 폴더 리비전 수직 슬라이스, ADR-0006 Phase 2
 
 ## 1. 완료된 산출물
 
@@ -25,9 +25,9 @@ BGE-M3, FAISS, 파서 의존성은 대상 Mac 실측과 라이선스 검토가 �
 | 계층 | 구현 내용 |
 | --- | --- |
 | Domain | 오류·값 객체, 리비전 상태, DocumentJob 상태 머신·진행 불변 조건 |
-| Application | revision 유스케이스, 공통 Progress DTO·Reporter, Job·Event 포트 |
-| Infrastructure | 설정 loader, MLX 어댑터, 청킹·계획, 경로 보안, 원자 쓰기, 폴더 workspace, tree comparator |
-| Presentation | `rag doctor`, `rag revision prepare`, `compare`, `finalize`, `rag document integrate` |
+| Application | revision·Job 관리, Evidence·Claim·Task 계획/실행/검증, 결정적 조립과 최종 품질 게이트 |
+| Infrastructure | 설정 loader, MLX·구조화 생성 어댑터, SQLite Job/Event, write-once Job·Task·최종 게이트 저장소, 폴더 workspace |
+| Presentation | `rag doctor`, revision/document 명령, `rag job create/list/status/events/cancel` |
 | Composition | `bootstrap.py` 단일 조립 지점과 명시적 close 경계 |
 
 AST 기반 아키텍처 테스트가 Domain에서 바깥 계층으로 향하는 import와 Application에서 Infrastructure·Presentation으로 향하는 import를 차단한다.
@@ -57,10 +57,19 @@ AST 기반 아키텍처 테스트가 Domain에서 바깥 계층으로 향하는 
 | M1-05 | 부분 완료 | 단일 bootstrap과 close 경계 | DB·워커가 추가될 때 `ExitStack` 적용 |
 | M1-06 | 완료 | AST import 경계 테스트 | CI 실행 환경 연결 |
 | M1-07 | 완료 | 프로젝트 리비전 스킬이 애플리케이션 코드 호출 | 공식 validator 재실행 |
-| M1-16 | 완료 | `DocumentJobState`, 전이·terminal·진행 불변 조건 | SQLite repository 연결 |
-| M1-17 | 부분 완료 | `ProgressEventDto`, Reporter, publisher 포트와 CLI 연결 | 이벤트 영속화·GUI 구독 |
+| M1-16 | 완료 | `DocumentJobState`, 허용 전이·terminal·단조 진행 불변 조건 | 없음 |
+| M1-17 | 부분 완료 | `ProgressEventDto`, SQLite 원자 이벤트·counter, CLI 조회 | GUI 실시간 구독 |
 | M1-18 | 완료 | 파일 Job 저장소, 원자 초기화, write-once JSON, path/link guard | 없음 |
-| M1-19 | 대기 | DDL과 포트 계약 완료 | SQLite migration·repository 구현 |
+| M1-19 | 완료 | checksum migration, Job CAS, Event·counter 원자 commit, 재개 조회 | 없음 |
+| M1-24 | 부분 완료 | 고정 10단계 Coordinator, 실패·취소·`NEEDS_ATTENTION`, 실제 SQLite 통합 시험 | 실제 단계 어댑터·프로세스 Worker 연결 |
+| M5-02 | 부분 완료 | text chunk Evidence DTO, 결정 ID, 100% 배정 검사, 전용 파일 저장소 | parser 구조 요소·ACL Evidence |
+| M5-03 | 완료 | Evidence 제한 Claim 추출, 결정 ID, 동일 내용·다중 Evidence 병합, Ledger 저장소 | 없음 |
+| M5-04 | 부분 완료 | 구조화 관계 판정, known-pair·중복 pair 검증, conflict 전달 | 대규모 Claim 후보 축소·평가 보정 |
+| M5-05 | 완료 | Claim 단일 소유, Evidence 100% Coverage, 순환 없는 고정 Task DAG | 없음 |
+| M5-06 | 완료 | TaskPacket·TaskOutput strict 계약과 write-once attempt 저장 | 없음 |
+| M5-07 | 부분 완료 | JSON 전용 MLX 어댑터, 태스크 검증, 실패 태스크만 최대 2회 재작성 | 별도 프로세스 Worker·재시작 attempt 복구 |
+| M5-08 | 완료 | 계획 순서 기반 Markdown 조립, Evidence→source 변환, 전체 모델 재작성 없음 | 없음 |
+| M5-09 | 부분 완료 | Claim/Evidence/source 100% 게이트, Markdown·marker 검사, draft/report 체크포인트 | 의미 정확도·인용 정확도 평가 세트 |
 | M1-30B | 완료 | after workspace, path guard, overwrite 차단 | OS 배포 ACL runbook |
 | M1-30C | 완료 | 네 상태, hash, text diff, 원자 report | 대용량 binary 성능 시험 |
 | M1-40 | 부분 완료 | 설정·경로·web disabled doctor | 모델·DB·디스크·권한 진단 |
@@ -70,11 +79,11 @@ AST 기반 아키텍처 테스트가 Domain에서 바깥 계층으로 향하는 
 
 | 검사 | 결과 |
 | --- | --- |
-| pytest | 53 passed, 10 subtests passed |
-| branch coverage | 87.12%, 기준 85% 통과 |
+| pytest | 122 passed, 34 subtests passed |
+| branch coverage | 85.43%, 기준 85% 통과 |
 | 프로젝트 스킬 unittest | 4 passed |
 | Ruff | 통과 |
-| mypy strict | 54 source files 통과 |
+| mypy strict | 97 source files 통과 |
 | 아키텍처 import 경계 | 위반 0건 |
 | editable package 설치 | 성공, `rag` 콘솔 스크립트 생성 |
 | `rag doctor` | development 설정에서 성공, web disabled 확인 |
@@ -97,13 +106,31 @@ AST 기반 아키텍처 테스트가 Domain에서 바깥 계층으로 향하는 
 - 완료 표식, 출처 정규화, 필수 구조 검증을 통과하기 전에는 after run을 만들지 않는다.
 - 이 수직 슬라이스의 map/reduce는 호환 경로이며 ADR-0006 Task 파이프라인으로 단계적으로
   대체한다.
+- 원본 탐색·읽기·청킹·source 배정은 `InspectIntegrationSources`로 분리했다. 모든 청크는
+  정확히 하나의 원본 경로를 가지며 중복 청크 ID와 불완전 coverage를 거부한다.
+
+### 3.2 ADR-0006 Evidence·Task 경로
+
+- Evidence 하나씩 구조화 Claim을 추출하며 다른 Evidence ID 참조와 불완전 JSON을 거부한다.
+- 표현과 운영 세부가 동일한 Claim은 원본이 달라도 하나로 병합하고 모든 Evidence를 유지한다.
+- 관계 판정기는 의미 있는 관계만 제안하고 코드는 알 수 없는 Claim, 중복 pair, `UNRELATED`
+  출력을 거부한다.
+- Task planner의 제안 뒤 Claim 단일 소유, Evidence 100%, 의존성 존재와 DAG 무순환을 코드로
+  다시 검증한다.
+- 각 Task attempt는 구조화 JSON 원본과 검증 보고서를 별도 write-once 파일로 보존한다.
+- 완료 표식, 허용 Claim/Evidence, 근거 marker, 코드 펜스, 명령·전제조건·경고, 충돌 노출을
+  검사하고 실패한 Task만 최대 2회 재작성한다.
+- Assembler는 계획된 Task·section 순서로만 조립하고 Evidence marker를 source 경로로 바꾼다.
+- 최종 게이트는 Claim/Evidence/source coverage, 구조, marker, 해시를 확인하며 초안과 보고서는
+  `derived/assembled-draft.md`, `control/final-validation.json`에 체크포인트한다.
+- 위 컴포넌트는 fake 모델과 실제 파일·SQLite 경계에서 검증됐다. 새 경로의 실제 27B 전체 실행과
+  `data/after` 게시 단계 연결은 아직 완료되지 않았다.
 
 ## 4. 다음 구현 순서
 
-1. M1-19 SQLite DocumentJob·ProgressEvent migration과 CAS transition을 구현한다.
-2. `IntegrateDocuments`를 원본 검사, 계획, 생성, 검증, 게시 use case로 분리한다.
-3. Evidence DTO·저장소와 원본 구조 요소 100% 배정 검사를 구현한다.
-4. Claim Ledger, 관계 판정, Coverage Matrix와 TaskPacket을 순서대로 구현한다.
-5. 결정적 assembler와 quality gate 후 MLX worker·GUI를 연결한다.
+1. 구현된 유스케이스를 Coordinator의 실제 10단계 어댑터로 조립하고 게이트 통과 후 게시만 허용한다.
+2. MLX 실행을 별도 프로세스 Worker로 옮기고 heartbeat·취소·attempt 재개를 연결한다.
+3. 대규모 Claim 관계 판정의 후보 축소와 batch 예산을 구현하고 실제 27B 평가를 수행한다.
+4. PySide6 GUI에 폴더 선택, Job 생성·실행, 이벤트 복원, 건수 진행률과 완료 알림을 연결한다.
 
 Milestone 2의 BGE 분류와 중복 제거는 위 기반 작업과 대상 Mac 실측 gate를 통과하기 전 production 코드로 추가하지 않는다.

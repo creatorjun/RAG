@@ -1,0 +1,22 @@
+from __future__ import annotations
+
+from enum import Enum
+
+
+class ClaimKind(str, Enum):
+    FACT = "FACT"
+    PROCEDURE = "PROCEDURE"
+    COMMAND = "COMMAND"
+    PREREQUISITE = "PREREQUISITE"
+    WARNING = "WARNING"
+    VALIDATION = "VALIDATION"
+    ROLLBACK = "ROLLBACK"
+
+
+class ClaimRelationType(str, Enum):
+    EXACT_DUPLICATE = "EXACT_DUPLICATE"
+    SEMANTIC_EQUIVALENT = "SEMANTIC_EQUIVALENT"
+    COMPLEMENTARY = "COMPLEMENTARY"
+    CONTEXTUAL_REPEAT = "CONTEXTUAL_REPEAT"
+    CONFLICT = "CONFLICT"
+    UNRELATED = "UNRELATED"

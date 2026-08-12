@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, Protocol
 
+from enterprise_rag.application.dto.jobs import CreateDocumentJobDto
 from enterprise_rag.domain.jobs import DocumentJob
 
 
@@ -10,8 +11,7 @@ class JobArtifactRepositoryPort(Protocol):
     async def initialize(
         self,
         job: DocumentJob,
-        instruction: str,
-        pipeline_fingerprint: str,
+        definition: CreateDocumentJobDto,
     ) -> None:
         raise NotImplementedError
 
@@ -24,4 +24,15 @@ class JobArtifactRepositoryPort(Protocol):
         raise NotImplementedError
 
     async def read_json(self, job_id: str, relative_path: str) -> dict[str, Any]:
+        raise NotImplementedError
+
+    async def write_text_once(
+        self,
+        job_id: str,
+        relative_path: str,
+        value: str,
+    ) -> str:
+        raise NotImplementedError
+
+    async def read_text(self, job_id: str, relative_path: str) -> str:
         raise NotImplementedError

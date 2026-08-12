@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import importlib.util
 import json
 import sys
@@ -10,6 +11,7 @@ from collections.abc import Sequence
 from dataclasses import asdict
 from pathlib import Path
 
+from enterprise_rag.application.dto.jobs import CreateDocumentJobDto, DocumentJobDto
 from enterprise_rag.application.dto.long_document import LongDocumentPlanDto
 from enterprise_rag.application.dto.progress import IntegrationProgress
 from enterprise_rag.application.dto.revision import (
@@ -17,8 +19,13 @@ from enterprise_rag.application.dto.revision import (
     FolderComparisonDto,
     RevisionRunDto,
 )
-from enterprise_rag.bootstrap import Application, build_application
-from enterprise_rag.domain.errors import ApplicationError
+from enterprise_rag.bootstrap import (
+    Application,
+    JobApplication,
+    build_application,
+    build_job_application,
+)
+from enterprise_rag.domain.errors import ApplicationError, revision_error
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -39,6 +46,19 @@ def _build_parser() -> argparse.ArgumentParser:
     integrate = document_commands.add_parser("integrate")
     integrate.add_argument("--run-id")
     integrate.add_argument("--output", default="integrated-technical-guide.md")
+    job = commands.add_parser("job")
+    job_commands = job.add_subparsers(dest="job_command", required=True)
+    create_job = job_commands.add_parser("create")
+    create_job.add_argument("--source-root", type=Path, required=True)
+    create_job.add_argument("--instruction", required=True)
+    create_job.add_argument("--output", default="integrated-technical-guide.md")
+    list_jobs = job_commands.add_parser("list")
+    list_jobs.add_argument("--limit", type=int, default=100)
+    for name in ("status", "events", "cancel"):
+        job_command = job_commands.add_parser(name)
+        job_command.add_argument("--job-id", required=True)
+        if name == "events":
+            job_command.add_argument("--after-sequence", type=int, default=0)
     return parser
 
 
@@ -114,6 +134,25 @@ def _serialize_integration(value: DocumentIntegrationDto) -> dict[str, object]:
     }
 
 
+def _serialize_job(value: DocumentJobDto) -> dict[str, object]:
+    return {
+        "job_id": value.job_id,
+        "state": value.state.value,
+        "last_event_sequence": value.last_event_sequence,
+        "last_percentage": value.last_percentage,
+    }
+
+
+def _pipeline_fingerprint(application: JobApplication) -> str:
+    payload = json.dumps(
+        application.configuration.settings.model_dump(mode="json"),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def _print_integration_progress(value: IntegrationProgress) -> None:
     counter = ""
     if value.completed is not None and value.total is not None:
@@ -160,11 +199,61 @@ async def _execute(application: Application, args: argparse.Namespace) -> dict[s
     return _serialize_run(await application.finalize_revision_run.execute(args.run_id))
 
 
+async def _execute_job(
+    application: JobApplication,
+    args: argparse.Namespace,
+) -> dict[str, object]:
+    if args.job_command == "create":
+        try:
+            request = CreateDocumentJobDto(
+                source_root=str(args.source_root.expanduser().resolve(strict=False)),
+                instruction=args.instruction,
+                output_relative_path=args.output,
+                pipeline_fingerprint=_pipeline_fingerprint(application),
+            )
+        except ValueError as error:
+            raise revision_error("INVALID_INPUT") from error
+        return _serialize_job(await application.create_document_job.execute(request))
+    if args.job_command == "list":
+        jobs = await application.list_document_jobs.execute(args.limit)
+        return {"jobs": [_serialize_job(job) for job in jobs]}
+    if args.job_command == "status":
+        return _serialize_job(await application.get_document_job.execute(args.job_id))
+    if args.job_command == "cancel":
+        return _serialize_job(
+            await application.request_document_job_cancellation.execute(args.job_id)
+        )
+    events = await application.list_document_job_events.execute(
+        args.job_id,
+        args.after_sequence,
+    )
+    return {
+        "events": [
+            {
+                "job_id": event.job_id,
+                "sequence": event.sequence,
+                "stage": event.stage,
+                "message": event.message,
+                "counter_name": event.counter_name,
+                "completed": event.completed,
+                "total": event.total,
+                "overall_percentage": event.percentage,
+                "occurred_at": event.occurred_at,
+            }
+            for event in events
+        ]
+    }
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     try:
-        with build_application(args.project_root, args.environment) as application:
-            result = asyncio.run(_execute(application, args))
+        if args.command == "job":
+            with build_job_application(args.project_root, args.environment) as job_application:
+                result = asyncio.run(_execute_job(job_application, args))
+        else:
+            with build_application(args.project_root, args.environment) as application:
+                result = asyncio.run(_execute(application, args))
     except ApplicationError as error:
         payload = {
             "code": error.code,

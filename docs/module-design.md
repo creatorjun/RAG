@@ -195,6 +195,7 @@
 | `PublishArtifacts` | artifact 세대 | 게시 매니페스트 | 세대 활성화 |
 | `CreateDocumentJob` | source root, 작업 지시 | DocumentJob | Job 생성 |
 | `InspectDocumentJob` | Job ID | source manifest | Job checkpoint |
+| `InspectIntegrationSources` | text source, chunk config | 문서·청크·source 배정 | 입력 bundle |
 | `PlanDocumentTasks` | Claim Ledger, 요구사항 | Coverage Matrix, TaskPacket | 계획 확정 |
 | `ExecuteDocumentTask` | TaskPacket | TaskOutput | Task attempt |
 | `ValidateDocumentTask` | TaskPacket, TaskOutput | 검증 보고서 | Task attempt |
@@ -353,6 +354,10 @@
 
 ### 5.1 CLI 명령 집합
 
+아래 표는 최종 목표 명령 집합이다. 현재 실행 가능한 명령은 `doctor`, `revision
+prepare/compare/finalize`, `document plan/integrate`, `job create/list/status/events/cancel`이며,
+`document integrate`는 새 Task 파이프라인 연결 전의 호환 경로다.
+
 | 명령 | 역할 | 기본 부작용 |
 | --- | --- | --- |
 | `rag source add` | 승인 소스 등록 | 설정 DB 변경 |
@@ -421,3 +426,10 @@ GUI와 CLI는 같은 Application 유스케이스를 사용한다.
 - JSON checkpoint는 write-once이며 기존 파일 덮어쓰기 금지
 - 상대 `.json` 경로만 허용하고 link·경로 탈출 차단
 - Job 상태 변경은 이 저장소가 아니라 DocumentJobRepository가 담당
+
+#### `FilesystemEvidenceRepository`
+
+- Job의 `evidence/index.json` namespace만 사용
+- 원본 경로·리비전·문자 범위·내용 해시와 Evidence ID 보존
+- Evidence bundle write-once와 schema 재검증
+- Derived·Control 산출물 저장 금지

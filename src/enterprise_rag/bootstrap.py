@@ -5,9 +5,20 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from enterprise_rag.application.dto.long_document import ChunkingConfigDto
+from enterprise_rag.application.use_cases.build_evidence_bundle import BuildEvidenceBundle
 from enterprise_rag.application.use_cases.compare_revision_run import CompareRevisionRun
+from enterprise_rag.application.use_cases.create_document_job import CreateDocumentJob
 from enterprise_rag.application.use_cases.finalize_revision_run import FinalizeRevisionRun
+from enterprise_rag.application.use_cases.inspect_integration_sources import (
+    InspectIntegrationSources,
+)
 from enterprise_rag.application.use_cases.integrate_documents import IntegrateDocuments
+from enterprise_rag.application.use_cases.manage_document_jobs import (
+    GetDocumentJob,
+    ListDocumentJobEvents,
+    ListDocumentJobs,
+    RequestDocumentJobCancellation,
+)
 from enterprise_rag.application.use_cases.plan_long_document import PlanLongDocument
 from enterprise_rag.application.use_cases.prepare_revision_run import PrepareRevisionRun
 from enterprise_rag.domain.context_budget import TokenBudget
@@ -16,7 +27,13 @@ from enterprise_rag.infrastructure.chunking.structure_aware_text_chunker import 
 )
 from enterprise_rag.infrastructure.clock.system import SystemClock, UuidIdGenerator
 from enterprise_rag.infrastructure.config.settings import LoadedSettings, SettingsLoader
+from enterprise_rag.infrastructure.jobs.filesystem_job_artifact_repository import (
+    FilesystemJobArtifactRepository,
+)
 from enterprise_rag.infrastructure.models.mlx_text_generator import MlxTextGenerator
+from enterprise_rag.infrastructure.persistence.sqlite_document_job_repository import (
+    SqliteDocumentJobRepository,
+)
 from enterprise_rag.infrastructure.planning.hierarchical_context_planner import (
     HierarchicalContextPlanner,
 )
@@ -43,6 +60,25 @@ class Application:
         return None
 
     def __enter__(self) -> Application:
+        return self
+
+    def __exit__(self, exception_type: object, exception: object, traceback: object) -> None:
+        self.close()
+
+
+@dataclass(frozen=True, slots=True)
+class JobApplication:
+    configuration: LoadedSettings
+    create_document_job: CreateDocumentJob
+    get_document_job: GetDocumentJob
+    list_document_jobs: ListDocumentJobs
+    list_document_job_events: ListDocumentJobEvents
+    request_document_job_cancellation: RequestDocumentJobCancellation
+
+    def close(self) -> None:
+        return None
+
+    def __enter__(self) -> JobApplication:
         return self
 
     def __exit__(self, exception_type: object, exception: object, traceback: object) -> None:
@@ -102,9 +138,9 @@ def build_application(project_root: Path, environment: str | None = None) -> App
         separator_tokens=settings.synthesis.batch_separator_tokens,
     )
     integrate_documents = IntegrateDocuments(
-        source=source,
+        source_inspector=InspectIntegrationSources(source, chunker, chunking_config),
+        evidence_builder=BuildEvidenceBundle(),
         workspace=workspace,
-        chunker=chunker,
         planner=planner,
         generator=MlxTextGenerator(
             model_id=settings.models.llm.model_id,
@@ -114,7 +150,6 @@ def build_application(project_root: Path, environment: str | None = None) -> App
         ),
         clock=clock,
         id_generator=id_generator,
-        chunking_config=chunking_config,
         map_budget=map_budget,
         reduce_budget=reduce_budget,
         final_max_output_tokens=settings.synthesis.final_max_output_tokens,
@@ -128,4 +163,22 @@ def build_application(project_root: Path, environment: str | None = None) -> App
         finalize_revision_run=FinalizeRevisionRun(workspace),
         plan_long_document=plan_long_document,
         integrate_documents=integrate_documents,
+    )
+
+
+def build_job_application(
+    project_root: Path,
+    environment: str | None = None,
+) -> JobApplication:
+    configuration = SettingsLoader(project_root).load(environment)
+    clock = SystemClock()
+    repository = SqliteDocumentJobRepository(configuration.paths.database, clock)
+    artifacts = FilesystemJobArtifactRepository(configuration.paths.var_root)
+    return JobApplication(
+        configuration=configuration,
+        create_document_job=CreateDocumentJob(repository, artifacts, UuidIdGenerator()),
+        get_document_job=GetDocumentJob(repository),
+        list_document_jobs=ListDocumentJobs(repository),
+        list_document_job_events=ListDocumentJobEvents(repository),
+        request_document_job_cancellation=RequestDocumentJobCancellation(repository),
     )

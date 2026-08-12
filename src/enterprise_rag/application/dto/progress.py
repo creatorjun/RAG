@@ -13,6 +13,7 @@ class ProgressEventDto:
     counter_name: str | None = None
     job_id: str | None = None
     sequence: int | None = None
+    occurred_at: str | None = None
 
     def __post_init__(self) -> None:
         if self.percentage is not None and not 0 <= self.percentage <= 100:

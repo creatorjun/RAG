@@ -6,6 +6,9 @@
 - 기준 모델: `mlx-community/Qwen3.6-27B-4bit`
 - 문서 상태: 구현 기준안
 
+실제 완료 범위, 검사 수치와 다음 구현 순서는
+[docs/implementation-status.md](docs/implementation-status.md)에서 관리한다.
+
 ## 1. 목표 디렉터리 및 파일 구조
 
 ```text

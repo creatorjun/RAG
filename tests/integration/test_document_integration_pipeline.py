@@ -8,6 +8,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from enterprise_rag.application.dto.long_document import ChunkingConfigDto
+from enterprise_rag.application.use_cases.build_evidence_bundle import BuildEvidenceBundle
+from enterprise_rag.application.use_cases.inspect_integration_sources import (
+    InspectIntegrationSources,
+)
 from enterprise_rag.application.use_cases.integrate_documents import IntegrateDocuments
 from enterprise_rag.domain.context_budget import TokenBudget
 from enterprise_rag.domain.errors import ApplicationError
@@ -133,21 +137,24 @@ class DocumentIntegrationPipelineTest(unittest.TestCase):
             counter = ConservativeUtf8TokenCounter()
             generator = _FakeTextGenerator()
             use_case = IntegrateDocuments(
-                source=BeforeTextDocumentSource(before, 1024 * 1024),
+                source_inspector=InspectIntegrationSources(
+                    BeforeTextDocumentSource(before, 1024 * 1024),
+                    StructureAwareTextChunker(counter),
+                    ChunkingConfigDto(
+                        tokenizer_id=counter.identifier,
+                        chunker_version="1",
+                        target_tokens=256,
+                        max_tokens=512,
+                        minimum_tokens=16,
+                        overlap_ratio=0.1,
+                    ),
+                ),
+                evidence_builder=BuildEvidenceBundle(),
                 workspace=workspace,
-                chunker=StructureAwareTextChunker(counter),
                 planner=HierarchicalContextPlanner(),
                 generator=generator,
                 clock=clock,
                 id_generator=ids,
-                chunking_config=ChunkingConfigDto(
-                    tokenizer_id=counter.identifier,
-                    chunker_version="1",
-                    target_tokens=256,
-                    max_tokens=512,
-                    minimum_tokens=16,
-                    overlap_ratio=0.1,
-                ),
                 map_budget=TokenBudget(4096, 512, 512, 128, 0.8),
                 reduce_budget=TokenBudget(4096, 512, 768, 128, 0.8),
                 final_max_output_tokens=1024,

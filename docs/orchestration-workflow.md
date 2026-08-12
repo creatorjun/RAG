@@ -62,11 +62,10 @@ var/jobs/<job_id>/
 ├── duplicate-relations.json
 ├── coverage-matrix.json
 ├── task-plan.json
-├── tasks/<task_id>/request.json
-├── tasks/<task_id>/output.json
-├── tasks/<task_id>/validation.json
-├── assembled-draft.md
-├── final-validation.json
+├── tasks/<task_id>/attempt-001/output.json
+├── tasks/<task_id>/attempt-001/validation.json
+├── derived/assembled-draft.md
+├── control/final-validation.json
 └── events.jsonl
 ```
 

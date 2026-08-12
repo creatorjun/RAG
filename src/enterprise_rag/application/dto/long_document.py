@@ -94,3 +94,24 @@ class HierarchicalContextPlanDto:
 class LongDocumentPlanDto:
     chunks: ChunkSetDto
     context_plan: HierarchicalContextPlanDto
+
+
+@dataclass(frozen=True, slots=True)
+class ChunkSourceDto:
+    chunk_id: str
+    relative_path: str
+
+
+@dataclass(frozen=True, slots=True)
+class IntegrationInputDto:
+    documents: tuple[TextDocumentDto, ...]
+    chunks: tuple[LongTextChunkDto, ...]
+    chunk_sources: tuple[ChunkSourceDto, ...]
+
+    @property
+    def relative_paths(self) -> tuple[str, ...]:
+        return tuple(document.relative_path for document in self.documents)
+
+    @property
+    def chunk_source_by_id(self) -> dict[str, str]:
+        return {source.chunk_id: source.relative_path for source in self.chunk_sources}

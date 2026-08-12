@@ -61,6 +61,20 @@ _REVISION_ERROR_SPECS: dict[str, tuple[ErrorCategory, str]] = {
     ),
     "INVALID_RUN_ID": (ErrorCategory.INVALID_INPUT, "실행 ID 형식이 올바르지 않습니다."),
     "INVALID_JOB_ID": (ErrorCategory.INVALID_INPUT, "문서 작업 ID 형식이 올바르지 않습니다."),
+    "JOB_ALREADY_EXISTS": (ErrorCategory.INVALID_INPUT, "같은 문서 작업이 이미 존재합니다."),
+    "JOB_NOT_FOUND": (ErrorCategory.INVALID_INPUT, "문서 작업을 찾을 수 없습니다."),
+    "JOB_STATE_CONFLICT": (
+        ErrorCategory.CONSISTENCY,
+        "문서 작업 상태가 예상 상태와 일치하지 않습니다.",
+    ),
+    "PROGRESS_EVENT_CONFLICT": (
+        ErrorCategory.CONSISTENCY,
+        "문서 작업 진행 이벤트의 순서가 올바르지 않습니다.",
+    ),
+    "DATABASE_SCHEMA_INVALID": (
+        ErrorCategory.CONSISTENCY,
+        "메타데이터 데이터베이스 스키마가 올바르지 않습니다.",
+    ),
     "JOB_ARTIFACT_ALREADY_EXISTS": (
         ErrorCategory.CONSISTENCY,
         "같은 문서 작업 산출물이 이미 존재합니다.",
@@ -72,6 +86,7 @@ _REVISION_ERROR_SPECS: dict[str, tuple[ErrorCategory, str]] = {
     "INPUT_HASH_CHANGED": (ErrorCategory.CONSISTENCY, "수정 전 문서가 실행 도중 변경되었습니다."),
     "COMPARISON_INCOMPLETE": (ErrorCategory.CONSISTENCY, "비교 보고서가 없거나 완전하지 않습니다."),
     "CONFIG_INVALID": (ErrorCategory.INVALID_INPUT, "프로젝트 설정이 올바르지 않습니다."),
+    "INVALID_INPUT": (ErrorCategory.INVALID_INPUT, "입력값이 올바르지 않습니다."),
     "DEPENDENCY_MISSING": (ErrorCategory.INTERNAL, "필수 Python 의존성이 설치되지 않았습니다."),
     "IO_FAILURE": (ErrorCategory.INTERNAL, "문서 작업 중 파일 시스템 오류가 발생했습니다."),
     "SOURCE_BUSY": (ErrorCategory.TRANSIENT_SOURCE, "문서를 읽는 동안 원본이 변경되었습니다."),
@@ -87,6 +102,34 @@ _REVISION_ERROR_SPECS: dict[str, tuple[ErrorCategory, str]] = {
     "CHUNK_COVERAGE_FAILED": (
         ErrorCategory.CONSISTENCY,
         "청크가 문서 전체를 정확히 한 번 포함하지 못했습니다.",
+    ),
+    "EVIDENCE_COVERAGE_FAILED": (
+        ErrorCategory.CONSISTENCY,
+        "원본 구조 요소가 Evidence에 완전하게 배정되지 않았습니다.",
+    ),
+    "CLAIM_LEDGER_INVALID": (
+        ErrorCategory.CONSISTENCY,
+        "Claim Ledger의 Evidence 참조 또는 관계가 올바르지 않습니다.",
+    ),
+    "COVERAGE_MATRIX_INCOMPLETE": (
+        ErrorCategory.CONSISTENCY,
+        "필수 Claim 또는 Evidence가 Task에 완전하게 배정되지 않았습니다.",
+    ),
+    "TASK_PLAN_INVALID": (
+        ErrorCategory.CONSISTENCY,
+        "문서 Task 계획 또는 의존관계가 올바르지 않습니다.",
+    ),
+    "TASK_OUTPUT_INVALID": (
+        ErrorCategory.MODEL_OUTPUT,
+        "문서 Task 출력이 필수 Claim·Evidence 계약을 충족하지 못했습니다.",
+    ),
+    "DOCUMENT_ASSEMBLY_FAILED": (
+        ErrorCategory.CONSISTENCY,
+        "검증된 Task 출력으로 최종 문서를 조립할 수 없습니다.",
+    ),
+    "FINAL_QUALITY_GATE_FAILED": (
+        ErrorCategory.CONSISTENCY,
+        "최종 문서 품질 보고서가 없거나 문서와 일치하지 않습니다.",
     ),
     "TOKEN_BUDGET_EXCEEDED": (
         ErrorCategory.INVALID_INPUT,

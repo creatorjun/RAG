@@ -564,8 +564,7 @@ class JobArtifactRepositoryPort(Protocol):
     async def initialize(
         self,
         job: DocumentJob,
-        instruction: str,
-        pipeline_fingerprint: str,
+        definition: CreateDocumentJobDto,
     ) -> None: ...
 
     async def write_json_once(
@@ -576,10 +575,21 @@ class JobArtifactRepositoryPort(Protocol):
     ) -> str: ...
 
     async def read_json(self, job_id: str, relative_path: str) -> dict[str, Any]: ...
+
+    async def write_text_once(
+        self,
+        job_id: str,
+        relative_path: str,
+        value: str,
+    ) -> str: ...
+
+    async def read_text(self, job_id: str, relative_path: str) -> str: ...
 ```
 
-`write_json_once`는 기존 checkpoint를 덮어쓰지 않는다. 경로는 Job root 아래 상대 `.json`만
-허용하며 link와 `..`를 거부한다.
+write-once 메서드는 기존 checkpoint를 덮어쓰지 않는다. JSON은 상대 `.json`, 조립 초안은
+상대 `.md`만 허용하며 Job root 밖 경로, link와 `..`를 거부한다. Task 결과는
+`tasks/<task_id>/attempt-<NNN>/`, 최종 후보와 게이트는 `derived/assembled-draft.md`와
+`control/final-validation.json`에 저장한다.
 
 ## 9. Job Queue와 Worker 계약
 
@@ -624,8 +634,10 @@ class ProgressEventDto:
 `sequence`는 Job별로 정확히 1씩 증가한다. 실행 중 percentage는 0~99이며 감소할 수 없다.
 `COMPLETED` 전이에서 100이 된다. 계획 확정 전 percentage는 `None`일 수 있다.
 
-`DocumentJobRepositoryPort`는 create, get, expected-state CAS transition을 제공한다.
-`ProgressEventPublisherPort`는 원문을 포함하지 않는 이벤트만 게시한다.
+`DocumentJobRepositoryPort`는 create, get, recent list, expected-state CAS transition을 제공한다.
+`ProgressEventPublisherPort`는 원문을 포함하지 않는 이벤트 게시와 `list_after` 순차 조회를
+제공한다. 이벤트 삽입과 Document Job의 마지막 sequence·percentage 갱신은 같은 SQLite
+트랜잭션이다.
 
 ### 9.1 작업 상태
 

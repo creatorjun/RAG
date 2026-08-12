@@ -29,12 +29,16 @@ rag revision finalize --run-id 20260810t120000z-oracle
 
 ## 전체 문서 자동 통합
 
-다음 명령 하나가 `data/before`의 지원되는 모든 UTF-8 텍스트 문서를 읽고, 새 run을 만든 뒤,
-로컬 Qwen 모델로 계층형 통합 문서를 생성하고 비교 보고서까지 작성합니다.
+다음 명령은 기존 호환 경로입니다. `data/before`의 지원되는 모든 UTF-8 텍스트 문서를 읽고,
+로컬 Qwen 모델로 계층형 통합 문서를 생성한 뒤 새 run과 비교 보고서를 작성합니다.
 
 ```bash
 rag document integrate
 ```
+
+이 명령은 아직 Evidence·Claim·Task 품질 게이트 경로로 교체되지 않았습니다. 새 경로의 계약과
+체크포인트는 구현됐지만 Coordinator 실제 단계와 게시가 연결될 때까지 운영 정본 생성에는
+사용하지 않습니다. 현재 상태는 [구현 상태](docs/implementation-status.md)를 기준으로 합니다.
 
 실행 중에는 문서 탐색, 청크 분할, 모델 로딩, 생성 배치, 저장 및 비교 단계가
 `[ 45%] 통합 문서를 생성하는 중 (2/8)` 형식으로 표시됩니다. 최종 JSON 결과는 기존과
@@ -59,5 +63,23 @@ rag document integrate \
 지원 입력 형식은 `.md`, `.txt`, `.rst`, `.html`, `.csv`, `.json`, `.yaml`, `.yml`,
 `.toml`, `.ini`, `.xml`입니다. `data/before`는 변경하지 않으며 모델에는 파일·셸·도구 실행
 권한을 부여하지 않습니다.
+
+## Document Job 관리
+
+GUI와 새 파이프라인이 공유할 SQLite Job 경계는 CLI에서 먼저 사용할 수 있습니다.
+
+```bash
+rag job create \
+  --source-root /absolute/path/to/source \
+  --instruction "중복을 통합하고 운영 절차와 충돌을 보존해 기술 문서를 작성" \
+  --output integrated-technical-guide.md
+rag job list
+rag job status --job-id <job_id>
+rag job events --job-id <job_id> --after-sequence 0
+rag job cancel --job-id <job_id>
+```
+
+`job create`는 정의와 체크포인트 디렉터리를 만들 뿐 아직 모델 Worker를 시작하지 않습니다.
+`job run`과 PySide6 GUI는 Coordinator 실제 단계 연결 후 제공됩니다.
 
 상세 설계는 [문서 인덱스](docs/README.md)와 [구현 계획](IMPLEMENTATION_PLAN.md)을 기준으로 합니다.
