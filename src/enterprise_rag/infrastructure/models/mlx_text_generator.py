@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import json
 import platform
 import re
 import threading
+from pathlib import Path
 from typing import Any
 
 from enterprise_rag.application.ports.cancellation import CancellationTokenPort
@@ -141,17 +143,11 @@ class MlxTextGenerator:
             if self._offline_mode:
                 try:
                     huggingface_hub = importlib.import_module("huggingface_hub")
-                    local_path = huggingface_hub.snapshot_download(
-                        repo_id=self._model_id,
-                        revision=self._model_revision,
-                        local_files_only=True,
-                    )
                 except ModuleNotFoundError as error:
                     raise revision_error(
                         "DEPENDENCY_MISSING", {"dependency": "huggingface-hub"}
                     ) from error
-                except Exception as error:
-                    raise revision_error("MODEL_NOT_CACHED") from error
+                local_path = self._resolve_offline_snapshot(huggingface_hub)
                 self._model, self._tokenizer = mlx_lm.load(str(local_path))
             else:
                 self._model, self._tokenizer = mlx_lm.load(
@@ -160,6 +156,74 @@ class MlxTextGenerator:
                 )
         self._raise_if_cancelled()
         return self._model, self._tokenizer
+
+    def _resolve_offline_snapshot(self, module: Any) -> Path:
+        try:
+            downloaded = module.snapshot_download(
+                repo_id=self._model_id,
+                revision=self._model_revision,
+                local_files_only=True,
+            )
+            snapshot = Path(downloaded).expanduser().resolve(strict=True)
+            self._validate_runtime_snapshot(snapshot)
+            return snapshot
+        except Exception:
+            # huggingface-hub 1.27+ rejects an otherwise runnable local snapshot
+            # when repository-only files such as README.md are absent. The model
+            # catalog and downloader intentionally validate MLX runtime files.
+            scanned_snapshot = self._find_scanned_snapshot(module)
+            if scanned_snapshot is None:
+                raise revision_error(
+                    "MODEL_NOT_CACHED",
+                    {
+                        "model_id": self._model_id,
+                        "model_revision": self._model_revision,
+                    },
+                ) from None
+            try:
+                self._validate_runtime_snapshot(scanned_snapshot)
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+                raise revision_error(
+                    "MODEL_SNAPSHOT_INVALID",
+                    {
+                        "model_id": self._model_id,
+                        "model_revision": self._model_revision,
+                    },
+                ) from None
+            return scanned_snapshot
+
+    def _find_scanned_snapshot(self, module: Any) -> Path | None:
+        try:
+            cache = module.scan_cache_dir()
+            for repository in cache.repos:
+                if (
+                    getattr(repository, "repo_type", None) != "model"
+                    or getattr(repository, "repo_id", None) != self._model_id
+                ):
+                    continue
+                for revision in repository.revisions:
+                    if (
+                        str(getattr(revision, "commit_hash", "")).lower()
+                        == self._model_revision
+                    ):
+                        return Path(revision.snapshot_path).expanduser().resolve(
+                            strict=False
+                        )
+        except Exception:
+            return None
+        return None
+
+    def _validate_runtime_snapshot(self, snapshot: Path) -> None:
+        if not snapshot.is_dir() or snapshot.name != self._model_revision:
+            raise ValueError("snapshot identity is invalid")
+        config = json.loads((snapshot / "config.json").read_text(encoding="utf-8"))
+        if not isinstance(config, dict) or not config:
+            raise ValueError("model config is invalid")
+        weights = tuple(snapshot.rglob("*.safetensors")) + tuple(
+            snapshot.rglob("*.npz")
+        )
+        if not weights or any(not path.is_file() for path in weights):
+            raise ValueError("model weights are missing")
 
     def _raise_if_cancelled(self) -> None:
         if self._cancellation is not None:

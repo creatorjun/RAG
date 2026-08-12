@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -50,28 +53,138 @@ class MlxTextGeneratorTest(unittest.TestCase):
         load.assert_called_once_with("test/model", revision="a" * 40)
 
     def test_offline_mode_resolves_only_pinned_local_snapshot(self) -> None:
-        generator = MlxTextGenerator(
-            "test/model", "a" * 40, 1024, 128, offline_mode=True
+        revision = "a" * 40
+        with tempfile.TemporaryDirectory() as temporary:
+            snapshot = Path(temporary) / revision
+            snapshot.mkdir()
+            (snapshot / "config.json").write_text(
+                json.dumps({"model_type": "test"}), encoding="utf-8"
+            )
+            (snapshot / "model.safetensors").write_bytes(b"weights")
+            generator = MlxTextGenerator(
+                "test/model", revision, 1024, 128, offline_mode=True
+            )
+            tokenizer = _FakeTokenizer()
+            load = Mock(return_value=(object(), tokenizer))
+            snapshot_download = Mock(return_value=str(snapshot))
+            modules = {
+                "mlx_lm": SimpleNamespace(load=load),
+                "huggingface_hub": SimpleNamespace(
+                    snapshot_download=snapshot_download
+                ),
+            }
+            with (
+                patch("platform.system", return_value="Darwin"),
+                patch("platform.machine", return_value="arm64"),
+                patch(
+                    "importlib.import_module", side_effect=lambda name: modules[name]
+                ),
+            ):
+                asyncio.run(generator.prepare())
+            snapshot_download.assert_called_once_with(
+                repo_id="test/model",
+                revision=revision,
+                local_files_only=True,
+            )
+            load.assert_called_once_with(str(snapshot.resolve()))
+
+    def test_offline_mode_accepts_runnable_scanned_snapshot_when_hub_manifest_is_incomplete(
+        self,
+    ) -> None:
+        revision = "b" * 40
+        with tempfile.TemporaryDirectory() as temporary:
+            snapshot = Path(temporary) / revision
+            snapshot.mkdir()
+            (snapshot / "config.json").write_text(
+                json.dumps({"model_type": "test"}), encoding="utf-8"
+            )
+            (snapshot / "model.safetensors").write_bytes(b"weights")
+            cache_revision = SimpleNamespace(
+                commit_hash=revision,
+                snapshot_path=snapshot,
+            )
+            cache_repository = SimpleNamespace(
+                repo_id="test/model",
+                repo_type="model",
+                revisions=(cache_revision,),
+            )
+            hub = SimpleNamespace(
+                snapshot_download=Mock(side_effect=RuntimeError("incomplete manifest")),
+                scan_cache_dir=Mock(
+                    return_value=SimpleNamespace(repos=(cache_repository,))
+                ),
+            )
+            load = Mock(return_value=(object(), _FakeTokenizer()))
+            modules = {
+                "mlx_lm": SimpleNamespace(load=load),
+                "huggingface_hub": hub,
+            }
+            generator = MlxTextGenerator(
+                "test/model", revision, 1024, 128, offline_mode=True
+            )
+            with (
+                patch("platform.system", return_value="Darwin"),
+                patch("platform.machine", return_value="arm64"),
+                patch(
+                    "importlib.import_module", side_effect=lambda name: modules[name]
+                ),
+            ):
+                asyncio.run(generator.prepare())
+
+            load.assert_called_once_with(str(snapshot.resolve()))
+
+    def test_offline_mode_distinguishes_missing_and_invalid_scanned_snapshot(
+        self,
+    ) -> None:
+        revision = "c" * 40
+        empty_cache = SimpleNamespace(
+            snapshot_download=Mock(side_effect=RuntimeError("not found")),
+            scan_cache_dir=Mock(return_value=SimpleNamespace(repos=())),
         )
-        tokenizer = _FakeTokenizer()
-        load = Mock(return_value=(object(), tokenizer))
-        snapshot_download = Mock(return_value="/cache/pinned-model")
-        modules = {
-            "mlx_lm": SimpleNamespace(load=load),
-            "huggingface_hub": SimpleNamespace(snapshot_download=snapshot_download),
-        }
-        with (
-            patch("platform.system", return_value="Darwin"),
-            patch("platform.machine", return_value="arm64"),
-            patch("importlib.import_module", side_effect=lambda name: modules[name]),
-        ):
-            asyncio.run(generator.prepare())
-        snapshot_download.assert_called_once_with(
-            repo_id="test/model",
-            revision="a" * 40,
-            local_files_only=True,
-        )
-        load.assert_called_once_with("/cache/pinned-model")
+        with tempfile.TemporaryDirectory() as temporary:
+            invalid_snapshot = Path(temporary) / revision
+            invalid_snapshot.mkdir()
+            invalid_revision = SimpleNamespace(
+                commit_hash=revision,
+                snapshot_path=invalid_snapshot,
+            )
+            invalid_cache = SimpleNamespace(
+                snapshot_download=Mock(side_effect=RuntimeError("incomplete")),
+                scan_cache_dir=Mock(
+                    return_value=SimpleNamespace(
+                        repos=(
+                            SimpleNamespace(
+                                repo_id="test/model",
+                                repo_type="model",
+                                revisions=(invalid_revision,),
+                            ),
+                        )
+                    )
+                ),
+            )
+            for hub, expected_code in (
+                (empty_cache, "MODEL_NOT_CACHED"),
+                (invalid_cache, "MODEL_SNAPSHOT_INVALID"),
+            ):
+                generator = MlxTextGenerator(
+                    "test/model", revision, 1024, 128, offline_mode=True
+                )
+                modules = {
+                    "mlx_lm": SimpleNamespace(load=Mock()),
+                    "huggingface_hub": hub,
+                }
+                with (
+                    self.subTest(expected_code=expected_code),
+                    patch("platform.system", return_value="Darwin"),
+                    patch("platform.machine", return_value="arm64"),
+                    patch(
+                        "importlib.import_module",
+                        side_effect=modules.__getitem__,
+                    ),
+                    self.assertRaises(ApplicationError) as captured,
+                ):
+                    asyncio.run(generator.prepare())
+                self.assertEqual(captured.exception.code, expected_code)
 
     def test_generates_deterministically_and_strips_reasoning(self) -> None:
         generator = _generator()
