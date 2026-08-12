@@ -587,6 +587,47 @@ WHERE status = 'active';
 
 ### 5.9 실행, 단계, 작업, 감사
 
+사용자 문서 실행과 Worker 큐 작업은 별도 테이블이다. `document_job`은 GUI·CLI에 노출되는
+장기 수명 주기이고 아래 `job` 테이블은 Worker가 소비하는 내부 큐다.
+
+```sql
+CREATE TABLE document_job (
+    document_job_id TEXT PRIMARY KEY CHECK (document_job_id GLOB 'job-[0-9a-f]*'),
+    state TEXT NOT NULL CHECK (state IN (
+        'CREATED', 'INSPECTING', 'SNAPSHOTTING', 'EXTRACTING_EVIDENCE',
+        'BUILDING_CLAIMS', 'PLANNING', 'RUNNING_TASKS', 'VALIDATING_TASKS',
+        'ASSEMBLING', 'VALIDATING_FINAL', 'PUBLISHING', 'COMPLETED',
+        'NEEDS_ATTENTION', 'CANCELLING', 'CANCELLED', 'FAILED'
+    )),
+    source_manifest_object_key TEXT REFERENCES stored_object(object_key) ON DELETE RESTRICT,
+    pipeline_fingerprint TEXT NOT NULL,
+    instruction_object_key TEXT NOT NULL REFERENCES stored_object(object_key) ON DELETE RESTRICT,
+    artifact_root TEXT NOT NULL UNIQUE,
+    last_event_sequence INTEGER NOT NULL DEFAULT 0 CHECK (last_event_sequence >= 0),
+    last_percentage INTEGER NOT NULL DEFAULT 0 CHECK (last_percentage BETWEEN 0 AND 100),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    finished_at TEXT
+);
+
+CREATE TABLE job_progress_event (
+    document_job_id TEXT NOT NULL REFERENCES document_job(document_job_id) ON DELETE RESTRICT,
+    sequence INTEGER NOT NULL CHECK (sequence >= 1),
+    stage TEXT NOT NULL,
+    message TEXT NOT NULL,
+    counter_name TEXT,
+    completed INTEGER CHECK (completed IS NULL OR completed >= 0),
+    total INTEGER CHECK (total IS NULL OR total >= 1),
+    overall_percentage INTEGER CHECK (
+        overall_percentage IS NULL OR overall_percentage BETWEEN 0 AND 100
+    ),
+    occurred_at TEXT NOT NULL,
+    PRIMARY KEY (document_job_id, sequence),
+    CHECK ((completed IS NULL) = (total IS NULL)),
+    CHECK (completed IS NULL OR completed <= total)
+);
+```
+
 ```sql
 CREATE TABLE pipeline_run (
     run_id TEXT PRIMARY KEY,

@@ -56,9 +56,10 @@ def _valid_settings() -> dict[str, object]:
         "synthesis": {
             "input_budget_ratio": 0.8,
             "map_prompt_overhead_tokens": 1024,
-            "map_max_output_tokens": 3072,
+            "map_max_output_tokens": 4096,
             "reduce_prompt_overhead_tokens": 1024,
             "reduce_max_output_tokens": 4096,
+            "final_max_output_tokens": 8192,
             "batch_item_overhead_tokens": 128,
             "batch_separator_tokens": 8,
         },
@@ -125,6 +126,14 @@ class SettingsTest(unittest.TestCase):
             "reserved_tokens": 512,
         }
         value["models"] = models
+        with self.assertRaises(ValidationError):
+            Settings.model_validate(value)
+
+    def test_rejects_final_synthesis_budget_above_context(self) -> None:
+        value = _valid_settings()
+        synthesis = dict(value["synthesis"])
+        synthesis["final_max_output_tokens"] = 12000
+        value["synthesis"] = synthesis
         with self.assertRaises(ValidationError):
             Settings.model_validate(value)
 

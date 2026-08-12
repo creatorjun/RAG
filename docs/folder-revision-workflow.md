@@ -220,10 +220,13 @@ python skills/manage-document-revisions/scripts/compare_run.py --before-root dat
 rag document integrate
 ```
 
-이 명령은 자동 run ID를 생성하고 `data/before`의 지원되는 모든 UTF-8 텍스트를 계층형으로
-통합해 현재 run의 `documents/integrated-technical-guide.md`에 추가한 뒤 compare를 실행한다.
-자동 finalize는 하지 않는다. 출력 JSON의 `run_id`와 비교 건수를 확인하고 사람이 결과를
-검토한 후 `rag revision finalize --run-id <run_id>`를 실행한다.
+이 명령은 현재 최소 수직 슬라이스의 호환 명령이다. 완료 표식·출처·필수 구조 검증을 통과한
+뒤에만 자동 run ID를 생성하고 `documents/integrated-technical-guide.md`를 추가해 compare를
+실행한다. 자동 finalize는 하지 않는다.
+
+목표 워크플로는 `rag job create` 또는 GUI가 원본 스냅샷과 Job을 만들고, Evidence·Claim·Task
+결과를 `var/jobs/<job_id>`에서 검증한 다음 품질 게이트 통과 후에만 신규 revision run을
+준비한다. 자세한 계약은 [orchestration-workflow.md](orchestration-workflow.md)를 따른다.
 
 ## 13. 오류와 운영 조치
 

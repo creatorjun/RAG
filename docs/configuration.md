@@ -188,8 +188,9 @@ web:
 synthesis:
   map_prompt_version: "1"
   reduce_prompt_version: "1"
-  map_max_output_tokens: 3072
+  map_max_output_tokens: 4096
   reduce_max_output_tokens: 4096
+  final_max_output_tokens: 8192
   input_budget_ratio: 0.80
   taxonomy_version: "1"
 

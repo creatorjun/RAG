@@ -9,9 +9,10 @@
 
 ```mermaid
 flowchart LR
-    OP["운영자"] --> CLI["로컬 CLI/API"]
+    OP["운영자"] --> UI["로컬 GUI·CLI"]
     EX["외부 승인 내보내기"] --> BEFORE["data/before 읽기 전용"]
-    BEFORE --> SYS["Enterprise RAG"]
+    UI --> SYS["Enterprise RAG"]
+    BEFORE --> SYS
     SYS --> AFTER["data/after 신규 run"]
     AFTER --> WIKI["검토·게시 채널"]
     SYS --> DB["SQLite·FAISS·CAS"]
@@ -27,6 +28,8 @@ flowchart LR
 - 주장 추출, 선택적 공개 웹 검증, 충돌 탐지
 - 승인 관리, 근거 기반 합성, 산출물 게시
 - 신규 폴더 run 준비, 경로 가드, 입력 매니페스트, 전후 비교와 finalization
+- Job 상태, Evidence·Derived 분리, Claim Ledger, Coverage Matrix와 Task DAG
+- 태스크별 품질 검증, 결정적 문서 조립, GUI 진행 이벤트와 완료 알림
 - 체크포인트, 재시도, 감사, 메트릭, 백업·복구
 
 ### 2.2 시스템 외부 책임
@@ -43,9 +46,11 @@ flowchart LR
 ```mermaid
 flowchart TB
     subgraph CP["Coordinator Process"]
-        API["CLI/API"]
+        API["GUI/CLI Application API"]
         ORCH["Pipeline Orchestrator"]
         QUEUE["SQLite Job Queue"]
+        EVENT["Progress Event Store"]
+        COVERAGE["Coverage·Quality Gate"]
         SCHED["Resource Scheduler"]
         META["Metadata Repository"]
         PUB["Artifact Publisher"]
@@ -66,6 +71,8 @@ flowchart TB
     STORE["SQLite + CAS + FAISS"]
     API --> ORCH
     ORCH --> QUEUE
+    ORCH --> EVENT
+    ORCH --> COVERAGE
     ORCH --> SCHED
     SCHED --> AW
     SCHED --> BW
@@ -87,10 +94,16 @@ Coordinator는 장기 생존 프로세스이며 다음 리소스를 소유한다
 - 워커 프로세스 생성·종료·상태 감시
 - 외부 HTTP 클라이언트와 egress 정책
 - `data/before`의 읽기 전용 루트와 현재 `data/after` run 경계
+- 선택한 원본 폴더의 실행별 불변 스냅샷과 `var/jobs/<job_id>` 아티팩트
+- Claim Ledger, Coverage Matrix, 고정 Task DAG, 단조 증가 진행 이벤트
 - 게시·비교 디렉터리의 원자적 파일 교체
 - 구조화 로그와 메트릭 수집
 
 Coordinator는 MLX 또는 BGE 모델을 import하거나 적재하지 않는다. 모델 런타임 오류와 Metal 메모리 단편화가 제어 plane에 전파되지 않도록 한다.
+
+Coordinator는 대화 세션을 작업 상태로 간주하지 않는다. Worker 요청은 불변 TaskPacket이며
+결과, attempt, 검증 보고서는 SQLite와 파일 아티팩트에 저장한다. 품질 게이트를 통과하기 전에는
+`data/after/runs`에 게시 run을 준비하지 않는다.
 
 ### 3.2 Track A Worker Process
 
@@ -163,6 +176,11 @@ flowchart TB
 | `WebEgressGateway` | 질의 후보 | 허용 결과 또는 차단 | HTTP 클라이언트 |
 | `ValidationService` | 주장·근거 | 검증 보고서·제안 | 없음 |
 | `SynthesisService` | 승인된 근거 카드 | 주제 산출물 | Qwen 세션은 워커가 소유 |
+| `ClaimLedgerService` | 원본 Evidence | 원자 Claim·관계 후보 | 없음 |
+| `CoveragePlanner` | Claim·원본 구조 | Coverage Matrix·Task DAG | 없음 |
+| `TaskValidationService` | TaskPacket·TaskOutput | 결정적·의미 검증 보고서 | 없음 |
+| `DeterministicAssembler` | 검증된 섹션 | 완전한 Markdown 후보 | 없음 |
+| `ProgressTracker` | 단계별 완료 건수 | 단조 증가 이벤트 | SQLite 이벤트 트랜잭션 |
 | `ArtifactPublisher` | 검증된 임시 산출물 | 활성 산출물 세대 | 임시·활성 디렉터리 |
 | `FolderRevisionWorkspace` | before root, 신규 run ID | run 문서 트리·입력 매니페스트 | 현재 run과 staging 디렉터리 |
 | `FolderTreeComparator` | before tree, run documents | 상태·해시·unified diff | 현재 run의 `_reports` |
@@ -240,22 +258,27 @@ sequenceDiagram
     participant M as Metadata DB
     participant B as Track B Worker
     participant P as Publisher
-    C->>M: select approved claims by topic and ACL fingerprint
-    M-->>C: evidence cards
-    C->>B: map(evidence cards)
-    B-->>C: cited topic fragments
-    C->>B: reduce(topic fragments)
-    B-->>C: candidate artifact
-    C->>C: deterministic citation verification
+    C->>M: load Claim Ledger and Coverage Matrix
+    M-->>C: fixed Task DAG and Evidence IDs
+    loop each task
+        C->>B: execute immutable TaskPacket
+        B-->>C: structured TaskOutput
+        C->>C: validate claims, evidence, structure
+    end
+    C->>C: deterministically assemble validated sections
+    C->>C: verify coverage, citations, conflicts, completeness
     alt verification fails
         C->>M: reject artifact and create review job
     else verification passes
-        C->>P: write current run documents
+        C->>P: prepare new run and write verified documents
         P-->>C: artifact manifest checksum
         C->>C: compare before and after trees
         C->>M: commit comparison and finalize run
     end
 ```
+
+최종 문서 전체를 Worker에 다시 전달하지 않는다. 의미 검증에 실패한 경우 동일 Evidence를
+고정하고 해당 섹션만 최대 2회 재작성한다. 통과한 다른 섹션과 Claim 연결은 변경하지 않는다.
 
 ## 7. 동시성과 백프레셔
 

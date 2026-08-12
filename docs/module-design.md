@@ -122,6 +122,24 @@
 - `status`는 `DRAFT`, `CITATION_FAILED`, `REVIEW_REQUIRED`, `APPROVED`, `PUBLISHED`다.
 - `PUBLISHED` 상태는 변경 불가이며 새 버전은 새 artifact ID를 사용한다.
 
+#### `DocumentJob`
+
+- `job_id`, `state`, 입력 스냅샷 ID, 파이프라인 지문
+- 허용된 상태 전이와 terminal 상태 불변 조건
+- 진행 이벤트의 마지막 sequence와 단조 증가 percentage
+
+#### `ClaimLedger`
+
+- Evidence에 연결된 원자 Claim 집합
+- 중복·보완·의도적 반복·충돌 관계
+- Derived-only Claim 게시 금지
+
+#### `CoverageMatrix`
+
+- 필수 Claim과 원본 구조 요소의 Task·최종 섹션 배정
+- 계획 확정 후 전체 작업량 불변
+- 미배정 필수 요소가 있으면 실행 계획 확정 금지
+
 ### 2.2 Value Objects
 
 | 값 객체 | 핵심 검증 |
@@ -175,6 +193,13 @@
 | `RecordApproval` | 대상, 결정, 행위자 | 승인 ID | 단일 결정 |
 | `SynthesizeTopic` | 주제, ACL fingerprint | 초안 artifact ID | 주제 단위 |
 | `PublishArtifacts` | artifact 세대 | 게시 매니페스트 | 세대 활성화 |
+| `CreateDocumentJob` | source root, 작업 지시 | DocumentJob | Job 생성 |
+| `InspectDocumentJob` | Job ID | source manifest | Job checkpoint |
+| `PlanDocumentTasks` | Claim Ledger, 요구사항 | Coverage Matrix, TaskPacket | 계획 확정 |
+| `ExecuteDocumentTask` | TaskPacket | TaskOutput | Task attempt |
+| `ValidateDocumentTask` | TaskPacket, TaskOutput | 검증 보고서 | Task attempt |
+| `AssembleDocument` | 검증된 TaskOutput | Markdown 후보 | Job artifact |
+| `PublishDocumentJob` | 품질 게이트 통과 Job | revision run | after run 생성·비교 |
 
 ### 3.2 애플리케이션 서비스
 
@@ -187,6 +212,22 @@
 - 취소 전파와 실행 종료 판정
 
 비즈니스 알고리즘을 직접 구현하지 않고 유스케이스와 포트를 조정한다.
+
+대화 기록을 상태로 사용하지 않으며 JobRepository, ArtifactRepository, ProgressEventPublisher를
+통해 모든 체크포인트를 명시적으로 저장한다. 품질 게이트 전 FolderRevisionWorkspace 호출을
+금지한다.
+
+#### `TaskPlanner`
+
+- Claim Ledger와 요구사항에서 Coverage Matrix 생성
+- 고정 Task DAG와 TaskPacket 생성
+- 원본 구조 요소 100% 배정 검증
+
+#### `DeterministicDocumentAssembler`
+
+- 검증된 Task 섹션만 입력 허용
+- 제목, 목차, 번호, 출처, 원본 목록을 결정적으로 렌더링
+- 전체 문서 모델 재작성 호출 금지
 
 #### `ResourceScheduler`
 
@@ -322,6 +363,9 @@
 | `rag ingest` | 증분 실행 생성 | 작업 큐 생성 |
 | `rag validate` | 인제스천 실행의 검증 작업 생성 | 작업 큐 생성 |
 | `rag run status` | 실행과 단계 상태 조회 | 없음 |
+| `rag job create` | 원본 폴더와 작업 지시로 Job 생성 | Job ID |
+| `rag job run` | 계획된 Job 실행 또는 재개 | 진행 이벤트 |
+| `rag job cancel` | 안전 취소 요청 | Job 상태 |
 | `rag run cancel` | 실행 취소 요청 | 취소 플래그 설정 |
 | `rag review list` | 승인 대기 목록 | 없음 |
 | `rag review decide` | 승인 결정 기록 | 승인 레코드 추가 |
@@ -339,6 +383,12 @@
 - 장시간 작업은 동기 HTTP 응답으로 기다리지 않고 `run_id`를 반환한다.
 - 원문 조회 API는 기본 제공하지 않는다.
 - 오류 응답은 내부 경로, 원문, 비밀값을 포함하지 않는다.
+
+### 5.3 로컬 GUI
+
+`presentation/gui`는 PySide6 View와 ViewModel만 포함한다. 폴더 선택, Job 생성, 진행 이벤트
+조회, 결과 열기, 완료 알림을 제공하며 파일 시스템·SQLite·MLX를 직접 호출하지 않는다.
+GUI와 CLI는 같은 Application 유스케이스를 사용한다.
 
 ## 6. Bootstrap과 의존성 조립
 
@@ -365,3 +415,9 @@
 - import 시 I/O 발생 0건
 - 워커 종료 후 모델 프로세스 잔존 0개
 - 모든 공개 Enum과 DTO가 문서·스키마·코드에서 동일
+#### `FilesystemJobArtifactRepository`
+
+- `var/jobs/<job_id>`를 staging에서 원자적으로 초기화
+- JSON checkpoint는 write-once이며 기존 파일 덮어쓰기 금지
+- 상대 `.json` 경로만 허용하고 link·경로 탈출 차단
+- Job 상태 변경은 이 저장소가 아니라 DocumentJobRepository가 담당

@@ -60,6 +60,15 @@ _REVISION_ERROR_SPECS: dict[str, tuple[ErrorCategory, str]] = {
         "완료된 실행은 변경하거나 다시 비교할 수 없습니다.",
     ),
     "INVALID_RUN_ID": (ErrorCategory.INVALID_INPUT, "실행 ID 형식이 올바르지 않습니다."),
+    "INVALID_JOB_ID": (ErrorCategory.INVALID_INPUT, "문서 작업 ID 형식이 올바르지 않습니다."),
+    "JOB_ARTIFACT_ALREADY_EXISTS": (
+        ErrorCategory.CONSISTENCY,
+        "같은 문서 작업 산출물이 이미 존재합니다.",
+    ),
+    "JOB_ARTIFACT_NOT_FOUND": (
+        ErrorCategory.INVALID_INPUT,
+        "문서 작업 산출물을 찾을 수 없습니다.",
+    ),
     "INPUT_HASH_CHANGED": (ErrorCategory.CONSISTENCY, "수정 전 문서가 실행 도중 변경되었습니다."),
     "COMPARISON_INCOMPLETE": (ErrorCategory.CONSISTENCY, "비교 보고서가 없거나 완전하지 않습니다."),
     "CONFIG_INVALID": (ErrorCategory.INVALID_INPUT, "프로젝트 설정이 올바르지 않습니다."),
@@ -102,6 +111,10 @@ _REVISION_ERROR_SPECS: dict[str, tuple[ErrorCategory, str]] = {
     "MODEL_OUTPUT_EMPTY": (
         ErrorCategory.MODEL_OUTPUT,
         "로컬 모델이 비어 있는 결과를 반환했습니다.",
+    ),
+    "MODEL_OUTPUT_INCOMPLETE": (
+        ErrorCategory.MODEL_OUTPUT,
+        "로컬 모델의 출력이 잘렸거나 필수 구조를 충족하지 못했습니다.",
     ),
     "PLATFORM_UNSUPPORTED": (
         ErrorCategory.INVALID_INPUT,

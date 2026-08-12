@@ -40,9 +40,10 @@ models:
 synthesis:
   input_budget_ratio: 0.8
   map_prompt_overhead_tokens: 1024
-  map_max_output_tokens: 3072
+  map_max_output_tokens: 4096
   reduce_prompt_overhead_tokens: 1024
   reduce_max_output_tokens: 4096
+  final_max_output_tokens: 8192
   batch_item_overhead_tokens: 128
   batch_separator_tokens: 8
 document_workspace:

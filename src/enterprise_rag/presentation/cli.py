@@ -11,12 +11,12 @@ from dataclasses import asdict
 from pathlib import Path
 
 from enterprise_rag.application.dto.long_document import LongDocumentPlanDto
+from enterprise_rag.application.dto.progress import IntegrationProgress
 from enterprise_rag.application.dto.revision import (
     DocumentIntegrationDto,
     FolderComparisonDto,
     RevisionRunDto,
 )
-from enterprise_rag.application.use_cases.integrate_documents import IntegrationProgress
 from enterprise_rag.bootstrap import Application, build_application
 from enterprise_rag.domain.errors import ApplicationError
 
@@ -118,8 +118,9 @@ def _print_integration_progress(value: IntegrationProgress) -> None:
     counter = ""
     if value.completed is not None and value.total is not None:
         counter = f" ({value.completed}/{value.total})"
+    percentage = " --" if value.percentage is None else f"{value.percentage:3d}"
     print(
-        f"[{value.percentage:3d}%] {value.message}{counter}",
+        f"[{percentage}%] {value.message}{counter}",
         file=sys.stderr,
         flush=True,
     )

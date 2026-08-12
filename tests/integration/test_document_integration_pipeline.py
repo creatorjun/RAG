@@ -10,6 +10,7 @@ from pathlib import Path
 from enterprise_rag.application.dto.long_document import ChunkingConfigDto
 from enterprise_rag.application.use_cases.integrate_documents import IntegrateDocuments
 from enterprise_rag.domain.context_budget import TokenBudget
+from enterprise_rag.domain.errors import ApplicationError
 from enterprise_rag.infrastructure.chunking.structure_aware_text_chunker import (
     StructureAwareTextChunker,
 )
@@ -60,19 +61,50 @@ class _FakeTextGenerator:
         if "최종본" in user_prompt:
             return """# 사내 기술 통합 가이드
 
+## 전제조건
+
+테스트 전제조건입니다. [source:guide.md / 0]
+
 ## 통합 절차
 
 두 문서를 통합했습니다. [source:guide.md] [source:settings.yaml]
 
-## 원본 문서 목록
+## 검증
 
-- `guide.md`
-- `settings.yaml`
+결과를 검증합니다. [source:guide.md]
+
+## 장애 복구
+
+장애 시 복구합니다. [source:guide.md]
+
+## 보안
+
+비밀을 노출하지 않습니다. [source:settings.yaml]
+
+<!-- ENTERPRISE_RAG_COMPLETE -->
 """
-        return "근거 노트 [source:guide.md] [source:settings.yaml]"
+        return """근거 노트 [source:guide.md] [source:settings.yaml]
+<!-- ENTERPRISE_RAG_COMPLETE -->"""
+
+
+class _IncompleteTextGenerator:
+    async def generate(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        max_output_tokens: int,
+    ) -> str:
+        return "잘린 모델 출력 [source:guide.md"
 
 
 class DocumentIntegrationPipelineTest(unittest.TestCase):
+    def test_rejects_generation_without_completion_marker(self) -> None:
+        use_case = object.__new__(IntegrateDocuments)
+        use_case._generator = _IncompleteTextGenerator()
+        with self.assertRaises(ApplicationError) as captured:
+            asyncio.run(use_case._generate("prompt", 128))
+        self.assertEqual(captured.exception.code, "MODEL_OUTPUT_INCOMPLETE")
+
     def test_creates_integrated_document_and_comparison_in_one_use_case(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
@@ -118,6 +150,7 @@ class DocumentIntegrationPipelineTest(unittest.TestCase):
                 ),
                 map_budget=TokenBudget(4096, 512, 512, 128, 0.8),
                 reduce_budget=TokenBudget(4096, 512, 768, 128, 0.8),
+                final_max_output_tokens=1024,
                 item_overhead_tokens=64,
                 separator_tokens=8,
             )
@@ -129,6 +162,9 @@ class DocumentIntegrationPipelineTest(unittest.TestCase):
             output = run_root / "documents" / "integrated-technical-guide.md"
             self.assertTrue(output.is_file())
             self.assertIn("# 사내 기술 통합 가이드", output.read_text(encoding="utf-8"))
+            self.assertIn("[source:guide.md]", output.read_text(encoding="utf-8"))
+            self.assertNotIn("[source:guide.md / 0]", output.read_text(encoding="utf-8"))
+            self.assertIn("## 원본 문서 목록", output.read_text(encoding="utf-8"))
             self.assertEqual(result.source_document_count, 2)
             self.assertEqual(result.comparison.counts["added"], 1)
             self.assertEqual(result.comparison.counts["unchanged"], 2)

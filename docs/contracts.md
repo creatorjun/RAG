@@ -360,8 +360,9 @@ class VectorIndexPort(Protocol):
 class GenerationPurpose(StrEnum):
     CLAIM_EXTRACTION = "claim_extraction"
     CLAIM_VALIDATION = "claim_validation"
-    MAP_SYNTHESIS = "map_synthesis"
-    REDUCE_SYNTHESIS = "reduce_synthesis"
+    CLAIM_RELATION = "claim_relation"
+    TASK_DRAFT = "task_draft"
+    TASK_REVIEW = "task_review"
 
 
 @dataclass(frozen=True, slots=True)
@@ -422,8 +423,9 @@ class LanguageModelPort(Protocol):
 | --- | ---: | --- | ---: | ---: |
 | 주장 추출 | 0.0 | 고정 | 2048 | 1 |
 | 주장 검증 | 0.0 | 고정 | 2048 | 1 |
-| Map 합성 | 0.1 | 고정 | 3072 | 1 |
-| Reduce 합성 | 0.1 | 고정 | 4096 | 1 |
+| Claim 관계 판정 | 0.0 | 고정 | 2048 | 1 |
+| Task 초안 | 0.0 | 고정 | Task별 예산 | 1 |
+| Task 의미 검증 | 0.0 | 고정 | 2048 | 1 |
 
 `input_token_count + max_output_tokens + reserved_tokens`가 승인 컨텍스트를 넘으면 모델을 호출하지 않고 `TokenBudgetExceededError`를 반환한다. `reserved_tokens` 기본값은 512다.
 
@@ -555,7 +557,75 @@ class ArtifactRepositoryPort(Protocol):
 
 저장 포트의 성공 반환은 바이트가 영구 저장되고 체크섬을 다시 검증할 수 있음을 뜻한다. 임시 파일만 존재하는 상태는 성공이 아니다.
 
+Job 중간 아티팩트 포트는 다음 계약을 추가한다.
+
+```python
+class JobArtifactRepositoryPort(Protocol):
+    async def initialize(
+        self,
+        job: DocumentJob,
+        instruction: str,
+        pipeline_fingerprint: str,
+    ) -> None: ...
+
+    async def write_json_once(
+        self,
+        job_id: str,
+        relative_path: str,
+        value: Mapping[str, object],
+    ) -> str: ...
+
+    async def read_json(self, job_id: str, relative_path: str) -> dict[str, Any]: ...
+```
+
+`write_json_once`는 기존 checkpoint를 덮어쓰지 않는다. 경로는 Job root 아래 상대 `.json`만
+허용하며 link와 `..`를 거부한다.
+
 ## 9. Job Queue와 Worker 계약
+
+Document Job은 사용자 실행 전체의 수명 주기이고 Worker Job은 단일 단계의 큐 항목이다. 두
+상태를 같은 타입이나 테이블로 표현하지 않는다.
+
+### 9.0 Document Job과 진행 이벤트
+
+```python
+class DocumentJobState(StrEnum):
+    CREATED = "CREATED"
+    INSPECTING = "INSPECTING"
+    SNAPSHOTTING = "SNAPSHOTTING"
+    EXTRACTING_EVIDENCE = "EXTRACTING_EVIDENCE"
+    BUILDING_CLAIMS = "BUILDING_CLAIMS"
+    PLANNING = "PLANNING"
+    RUNNING_TASKS = "RUNNING_TASKS"
+    VALIDATING_TASKS = "VALIDATING_TASKS"
+    ASSEMBLING = "ASSEMBLING"
+    VALIDATING_FINAL = "VALIDATING_FINAL"
+    PUBLISHING = "PUBLISHING"
+    COMPLETED = "COMPLETED"
+    NEEDS_ATTENTION = "NEEDS_ATTENTION"
+    CANCELLING = "CANCELLING"
+    CANCELLED = "CANCELLED"
+    FAILED = "FAILED"
+```
+
+```python
+@dataclass(frozen=True, slots=True)
+class ProgressEventDto:
+    percentage: int | None
+    stage: str
+    message: str
+    completed: int | None = None
+    total: int | None = None
+    counter_name: str | None = None
+    job_id: str | None = None
+    sequence: int | None = None
+```
+
+`sequence`는 Job별로 정확히 1씩 증가한다. 실행 중 percentage는 0~99이며 감소할 수 없다.
+`COMPLETED` 전이에서 100이 된다. 계획 확정 전 percentage는 `None`일 수 있다.
+
+`DocumentJobRepositoryPort`는 create, get, expected-state CAS transition을 제공한다.
+`ProgressEventPublisherPort`는 원문을 포함하지 않는 이벤트만 게시한다.
 
 ### 9.1 작업 상태
 

@@ -77,6 +77,7 @@ class SynthesisSettings(_StrictModel):
     map_max_output_tokens: int = Field(ge=256)
     reduce_prompt_overhead_tokens: int = Field(ge=128)
     reduce_max_output_tokens: int = Field(ge=256)
+    final_max_output_tokens: int = Field(ge=512)
     batch_item_overhead_tokens: int = Field(ge=64)
     batch_separator_tokens: int = Field(ge=0)
 
@@ -173,6 +174,14 @@ class Settings(_StrictModel):
         )
         if reduce_budget.content_capacity_tokens < minimum_reduce_capacity:
             raise ValueError("reduce budget cannot make hierarchical progress")
+        final_request_tokens = (
+            self.synthesis.reduce_max_output_tokens
+            + self.synthesis.reduce_prompt_overhead_tokens
+            + self.synthesis.final_max_output_tokens
+            + self.models.llm.reserved_tokens
+        )
+        if final_request_tokens > self.models.llm.context_tokens:
+            raise ValueError("final synthesis budget exceeds model context")
         return self
 
 

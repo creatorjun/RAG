@@ -27,6 +27,24 @@
 9. 운영 메트릭과 안전한 오류 코드 포함
 10. 기존 기준 계획을 변경하지 않음
 
+### 2.1 ADR-0006 구현 순서
+
+다음 세로 슬라이스는 다른 품질 기능보다 먼저 순서대로 구현한다.
+
+1. Job 상태 머신과 진행 이벤트 DTO·포트
+2. 파일 기반 Job 아티팩트 저장소와 SQLite Job/Event repository
+3. 현재 `IntegrateDocuments`의 단계별 use case 분리와 Job Coordinator 연결
+4. Evidence DTO·저장소와 입력 구조 요소 100% 배정 검사
+5. Claim Ledger와 중복·충돌 관계
+6. Coverage Matrix, TaskPacket, 고정 Task DAG
+7. Task 실행·검증·부분 재작성
+8. 결정적 Markdown assembler와 최종 품질 게이트
+9. MLX Worker 프로세스와 취소·재개
+10. PySide6 GUI와 완료 알림
+
+각 단계는 이전 단계의 공개 계약과 테스트가 완료된 뒤 시작한다. GUI는 Application 계층을
+우회하지 않는다.
+
 ## 3. Milestone 0: 기술 스파이크와 기준선
 
 ### 3.1 목표
@@ -92,6 +110,10 @@
 | M1-13 | CAS writer·reader | M1-04 | atomic write·hash |
 | M1-14 | metadata repository mapper | M1-11, M1-12 | 계약 테스트 |
 | M1-15 | checkpoint manager | M1-14 | 중복 commit 방지 |
+| M1-16 | DocumentJob 상태 머신 | M1-02, M1-03 | 허용·금지 전이 |
+| M1-17 | 진행 이벤트 DTO·publisher 포트 | M1-16 | sequence·건수·단조 증가 |
+| M1-18 | Job artifact repository | M1-13, M1-16 | 원자 쓰기·재개 |
+| M1-19 | SQLite Job·Event repository | M1-10, M1-16 | 상태 CAS·이벤트 순서 |
 
 ### 4.3 Coordinator와 워커 기반
 
@@ -264,19 +286,21 @@
 | ID | 작업 | 의존성 | 검증 |
 | --- | --- | --- | --- |
 | M5-01 | taxonomy registry | M2-23 | version·fallback |
-| M5-02 | evidence card builder | M3-20, M4-13 | ACL fingerprint |
-| M5-03 | map batch planner | M5-02 | token budget |
-| M5-04 | map synthesis | M3-03, M5-03 | sentence claim IDs |
-| M5-05 | reduce synthesis | M5-04 | conflict·version 보존 |
-| M5-06 | Markdown AST sentence IDs | M5-05 | 결정성 |
-| M5-07 | citation verifier | M5-06 | quote·ACL·hash |
+| M5-02 | Evidence store와 card builder | M3-20, M4-13 | Evidence·Derived 분리 |
+| M5-03 | Claim Ledger builder | M5-02 | 모든 Claim의 Evidence 연결 |
+| M5-04 | Claim 관계 판정 | M5-03 | duplicate·repeat·conflict |
+| M5-05 | Coverage Matrix·Task planner | M5-04 | 원본 요소·필수 Claim 100% |
+| M5-06 | TaskPacket·TaskOutput schema | M5-05 | 직렬화·허용 Evidence |
+| M5-07 | Task executor·validator | M3-03, M5-06 | 부분 재작성·완료 표식 |
+| M5-08 | deterministic Markdown assembler | M5-07 | 동일 입력 동일 출력 |
+| M5-09 | citation·coverage quality gate | M5-08 | quote·ACL·hash·완결성 |
 
 ### 8.2 게시
 
 | ID | 작업 | 의존성 | 검증 |
 | --- | --- | --- | --- |
 | M5-10 | artifact CAS repository | M1-13 | atomic write |
-| M5-11 | artifact generation builder | M5-07, M5-10 | manifest |
+| M5-11 | artifact generation builder | M5-09, M5-10 | manifest |
 | M5-12 | publish approval | M3-20, M5-11 | 필수 승인 |
 | M5-13 | activate·rollback | M5-12 | 이전 세대 유지 |
 | M5-14 | topic index·full export | M5-13 | 생성 전용 파일 |
@@ -312,6 +336,11 @@
 | M6-09 | 4시간 mixed soak | 전체 | stability gate |
 | M6-10 | 전체 코퍼스 dry run | 전체 | capacity report |
 | M6-11 | folder permission·finalized run restore drill | M1-30B, M6-05 | 불변성·복구 |
+| M6-20 | PySide6 application shell | M1-17, M1-24 | GUI import·종료 |
+| M6-21 | source folder·instruction 화면 | M6-20, M1-30 | 경로 보안·Job 생성 |
+| M6-22 | 계획 검토·진행 화면 | M6-21, M1-19 | event 복원·건수 표시 |
+| M6-23 | 결과·품질 보고서 화면 | M6-22, M5-16 | 상태별 동작 |
+| M6-24 | 완료 알림 adapter | M6-23 | 게시 후 단일 알림 |
 
 ### 9.2 종료 Gate
 
@@ -357,6 +386,7 @@ domain types
 | synthesis | claim grounding, citation, ACL |
 | operations | failure injection, backup·restore |
 | folder revision | path guard, before 불변, run overwrite, compare·finalize |
+| Job·GUI | 상태 전이, 이벤트 순서, 재개, UI 무응답 방지, 알림 시점 |
 
 ## 12. 구현 중 금지되는 단축
 
@@ -372,6 +402,10 @@ domain types
 - 문서와 다른 상태값·필드명을 코드에 추가
 - AI에 Confluence 자격정보 또는 원본 시스템 write-back 권한 제공
 - `data/before` 수정이나 기존·finalized after run 덮어쓰기
+- 대화 세션을 Job 상태나 재개 체크포인트로 사용
+- Derived 산출물을 최종 사실의 Evidence로 인용
+- 검증된 Task 섹션을 최종 모델 호출로 전체 재작성
+- 품질 게이트 전에 `data/after` 게시 run 생성
 
 ## 13. 최종 인수 산출물
 

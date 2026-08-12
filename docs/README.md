@@ -23,6 +23,7 @@
 | [pipeline.md](pipeline.md) | 파이프라인 개발자 | Milestone 1~5 | 단계 상태, 멱등성, 재시도, 분류, 중복, 검증, 합성 알고리즘 |
 | [configuration.md](configuration.md) | 전체 개발자, 운영자 | 최초 | 설정 스키마, 우선순위, 유효성 검증, 파이프라인 지문 |
 | [folder-revision-workflow.md](folder-revision-workflow.md) | AI 워크플로 개발자, 운영자 | Milestone 1, 5 | before/after 폴더, run 수명 주기, 비교, 권한 경계 |
+| [orchestration-workflow.md](orchestration-workflow.md) | GUI·파이프라인 개발자 | Milestone 1, 5~7 | Job, Evidence, Claim, Coverage, Task, 진행 이벤트, GUI |
 | [security.md](security.md) | 보안 담당자, 개발자 | 전체 | 신뢰 경계, ACL, 외부 반출, SSRF, 인젝션, 비밀정보, 감사 |
 | [operations.md](operations.md) | 운영자, SRE | Milestone 0, 6 | 설치, 벤치마크, 실행, 백업, 복구, 장애 대응, 업그레이드 |
 | [evaluation.md](evaluation.md) | QA, 도메인 전문가 | Milestone 0~6 | 골든 세트, 지표, 합격 기준, 성능·보안·회귀 평가 |
@@ -33,6 +34,7 @@
 | [ADR-0003](adr/0003-vector-store.md) | 검색 개발자 | Milestone 2 | SQLite·FAISS 저장 전략과 Qdrant 전환 기준 |
 | [ADR-0004](adr/0004-web-egress-policy.md) | 보안·검색 개발자 | Milestone 4 | 기본 차단 외부 검색과 비식별화 게이트 |
 | [ADR-0005](adr/0005-folder-revision-boundary.md) | 전체 개발자, 운영자 | Milestone 1 | Confluence API 제거와 폴더 리비전 경계 |
+| [ADR-0006](adr/0006-evidence-ledger-orchestration.md) | 전체 개발자 | Milestone 1, 5~7 | Evidence·Claim Ledger 기반 결정적 오케스트레이션 |
 
 ## 3. 계획 추적성
 
@@ -45,6 +47,7 @@
 | BGE-M3 분류와 중복 제거 | `pipeline.md`, `module-design.md` | `evaluation.md` 분류·중복 지표 |
 | SQLite·FAISS | `data-model.md`, ADR-0003 | `evaluation.md` 일관성·복구 시험 |
 | Qwen 주장 추출과 합성 | `pipeline.md`, `contracts.md`, ADR-0002 | `evaluation.md` 근거·인용 평가 |
+| Job·Task 오케스트레이션과 GUI | `orchestration-workflow.md`, ADR-0006 | `evaluation.md` Job·Coverage·GUI 회귀 |
 | 웹 검증 | `security.md`, `pipeline.md`, ADR-0004 | `evaluation.md` egress·인젝션 회귀 |
 | 사람 승인과 게시 | `data-model.md`, `pipeline.md` | `evaluation.md` 승인·출처 완전성 |
 | 36GB 메모리 운영 | `architecture.md`, `operations.md`, ADR-0002 | `evaluation.md` 성능·장시간 시험 |
@@ -72,6 +75,10 @@
 | Finalization | 비교 매니페스트를 고정하고 해당 run의 후속 수정을 금지하는 전이 |
 | 파이프라인 지문 | 코드, 설정, 모델, 프롬프트, 파서 버전을 해시한 재현성 식별자 |
 | 인덱스 세대 | 원자적으로 활성화·롤백할 수 있는 FAISS 인덱스 버전 |
+| Evidence | 최종 사실의 출처로 허용되는 원본 구조 요소와 좌표 |
+| Claim Ledger | Evidence에 연결된 원자적 사실·절차·명령·경고의 레지스트리 |
+| Coverage Matrix | 필수 Claim·원본 요소와 소유 Task·최종 섹션의 대응표 |
+| TaskPacket | 모델 작업에 전달하는 불변 목적·Claim·Evidence·출력 계약 |
 
 ## 5. 전역 불변 조건
 
@@ -88,6 +95,9 @@
 11. `data/before`의 파일 해시는 실행 전후 동일해야 한다.
 12. 모든 수정 결과는 기존 run이 아닌 신규 `data/after/runs/<run_id>`에만 기록한다.
 13. Confluence 자격정보는 설정, 프롬프트, 로그, 매니페스트, 워커 환경에 존재하지 않는다.
+14. Derived 산출물만으로 지지되는 사실은 게시할 수 없다.
+15. 품질 게이트 통과 전에는 `data/after/runs`에 게시 run을 만들지 않는다.
+16. 최종 문서는 검증된 Task 섹션을 결정적으로 조립하고 전체 자유 재작성하지 않는다.
 
 ## 6. 문서 유지 규칙
 

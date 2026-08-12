@@ -5,8 +5,8 @@
 
 ```mermaid
 flowchart TD
-    PRE["PREPARE_REVISION_RUN"] --> A["DISCOVER"]
-    A["DISCOVER"] --> B["SNAPSHOT"]
+    J["CREATE_JOB"] --> A["DISCOVER"]
+    A --> B["SNAPSHOT"]
     B --> C{"FILE_EXACT_DEDUP"}
     C -->|"기존 리비전"| Z["SKIP_UNCHANGED"]
     C -->|"신규 리비전"| D["PARSE"]
@@ -36,16 +36,23 @@ flowchart TD
     V -->|"block"| U
     W --> X["REVIEW_CHANGE"]
     X --> Y["BUILD_EVIDENCE_CARDS"]
-    Y --> AA["MAP_SYNTHESIS"]
-    AA --> AB["REDUCE_SYNTHESIS"]
-    AB --> AC["VERIFY_CITATIONS"]
-    AC --> AD{"PUBLISH_GATE"}
-    AD -->|"pass"| AE["PUBLISH_GENERATION"]
+    Y --> AA["BUILD_CLAIM_LEDGER"]
+    AA --> AB["PLAN_TASKS"]
+    AB --> AC["EXECUTE_TASKS"]
+    AC --> AH["VALIDATE_TASKS"]
+    AH --> AI["ASSEMBLE_DOCUMENT"]
+    AI --> AJ["VERIFY_CITATIONS_AND_COVERAGE"]
+    AJ --> AD{"PUBLISH_GATE"}
+    AD -->|"pass"| PRE["PREPARE_REVISION_RUN"]
+    PRE --> AE["PUBLISH_GENERATION"]
     AE --> AG["COMPARE_AND_FINALIZE"]
     AD -->|"fail"| AF["REVIEW_ARTIFACT"]
 ```
 
-`PREPARE_REVISION_RUN`, 승인, 게시, `COMPARE_AND_FINALIZE`는 Coordinator가 수행한다. Track A는 `DISCOVER`부터 `BUILD_VECTOR_GENERATION`까지고 Track B는 `PRIORITIZE_VALIDATION`부터 `VERIFY_CITATIONS`까지다.
+`CREATE_JOB`, `PLAN_TASKS`, 품질 게이트, `PREPARE_REVISION_RUN`, 게시,
+`COMPARE_AND_FINALIZE`는 Coordinator가 수행한다. Track A는 `DISCOVER`부터
+`BUILD_VECTOR_GENERATION`까지고 Track B는 Claim 추출, Task 실행과 의미 검증을 수행한다.
+게시 run은 품질 게이트 통과 후에만 준비한다.
 
 ## 2. 공통 단계 계약
 
@@ -69,7 +76,9 @@ flowchart TD
 
 ### 3.1 `DISCOVER`
 
-입력은 `data/before` source ID, 데이터셋 scope, cursor다. 출력은 `DocumentCandidate` 페이지와 다음 cursor다. 시작 전에 신규 after run과 입력 매니페스트가 준비돼 있어야 한다.
+입력은 GUI 또는 CLI에서 승인한 source root, 데이터셋 scope, cursor다. 출력은
+`DocumentCandidate` 페이지와 다음 cursor다. 시작 전에 Job과 `var/jobs/<job_id>` 입력
+스냅샷 영역이 준비돼 있어야 하며 after run은 아직 만들지 않는다.
 
 처리 규칙:
 
@@ -396,25 +405,23 @@ Qwen 입력은 주장, 내부 quote, 외부 evidence quote, 발행 주체, 게�
 
 ### 5.3 `MAP_SYNTHESIS`
 
-- 카드 입력은 토큰 예산의 80% 이하로 묶는다.
-- 같은 claim ID를 한 map batch에 한 번만 포함한다.
-- 출력은 Markdown fragment와 sentence별 claim ID 목록이다.
-- conflict 카드는 일반 사실 문장으로 확정하지 않고 충돌 섹션에 기록한다.
-- 근거에 없는 배경 설명 추가를 금지한다.
+이 단계는 `BUILD_CLAIM_LEDGER`로 대체한다. Evidence의 사실, 절차, 명령, 전제조건, 경고,
+검증, 롤백을 원자 Claim으로 추출한다. 모든 Claim은 하나 이상의 Evidence ID를 가져야 한다.
+Derived 산출물은 중복 후보 탐색에는 사용할 수 있지만 Evidence ID가 될 수 없다.
+
+Claim 관계는 exact·lexical·command fingerprint·embedding으로 후보를 만든 뒤 구조화된 의미
+판정으로 확정한다. 임베딩 점수만으로 Claim을 삭제하거나 병합하지 않는다.
 
 ### 5.4 `REDUCE_SYNTHESIS`
 
-고정 문서 구조:
+이 단계는 `PLAN_TASKS`, `EXECUTE_TASK`, `VALIDATE_TASK`, `ASSEMBLE_DOCUMENT`로 분리한다.
 
-1. 제목
-2. 적용 범위
-3. 현재 사내 기준
-4. 구성과 운영 지침
-5. 공개 최신 상태와 승인된 변경
-6. 충돌과 미확인 사항
-7. 출처
-
-Reduce는 map fragment의 claim ID를 보존하고 문장 병합 시 claim ID 합집합을 생성한다. 서로 다른 적용 버전은 하나의 문장으로 뭉개지 않고 버전별로 분리한다.
+1. Coverage Matrix가 모든 필수 Claim과 원본 구조 요소를 Task에 배정한다.
+2. 계획 확정 후 Task 수와 필수 검증 수를 고정한다.
+3. 각 Task는 허용 Claim·Evidence와 출력 스키마를 가진 TaskPacket만 입력받는다.
+4. 출력은 섹션별 Markdown, 사용 Claim ID, Evidence ID, 충돌 목록을 포함한다.
+5. 실패한 섹션만 동일 Evidence로 최대 2회 재작성한다.
+6. 검증된 섹션은 코드가 결정적으로 조립한다. 전체 자유 재작성은 금지한다.
 
 ### 5.5 `VERIFY_CITATIONS`
 
@@ -429,6 +436,9 @@ Markdown AST를 파싱해 사실 문장과 표 셀을 식별한다. 각 대상�
 
 검사 실패 문장이 하나라도 있으면 전체 artifact는 `citation_failed`다. 자동으로 해당 문장을 삭제하거나 근거를 꾸며내지 않는다.
 
+추가로 Coverage Matrix의 필수 Claim 100%, 원본 구조 요소 배정 100%, 완료 표식, Markdown
+완결성, 코드 펜스 균형, 숨겨진 conflict 0건을 검사한다.
+
 ### 5.6 `PUBLISH_GATE`
 
 필수 조건:
@@ -441,8 +451,12 @@ Markdown AST를 파싱해 사실 문장과 표 셀을 식별한다. 각 대상�
 - 활성 ACL 교집합 비어 있지 않음
 - before 입력 해시 재검사 성공
 - current after run 이외의 쓰기 0건
+- Task 검증 실패 0건과 Job final quality gate 통과
 
-게시 후보는 current after run의 `documents`에 기록한다. 이후 before와 documents를 비교해 added·modified·removed·unchanged, 전후 SHA-256, 텍스트 diff를 `_reports`에 원자적으로 생성한다. 비교 보고서와 입력 해시 검증이 끝나면 run을 finalization하고, 실패하면 기존 run과 before를 변경하지 않은 채 새 run으로 재시도한다.
+게시 후보는 게이트 통과 전까지 `var/jobs/<job_id>`에 기록한다. 통과 후에만 신규 after run을
+준비하고 `documents`에 기록한다. 이후 before와 documents를 비교해
+added·modified·removed·unchanged, 전후 SHA-256, 텍스트 diff를 `_reports`에 원자적으로
+생성한다. 실패하면 기존 run과 원본을 변경하지 않는다.
 
 ### 5.7 폴더 리비전 단계 계약
 
@@ -526,7 +540,10 @@ deterministic jitter는 job ID 해시로 계산해 재현 가능하게 한다.
 | claim prompt | `EXTRACT_CLAIMS` |
 | egress 정책 | `EGRESS_GATE` 이후 미완료·재검토 대상 |
 | validation prompt | `VALIDATE_CLAIM` |
-| synthesis prompt·taxonomy | `BUILD_EVIDENCE_CARDS` 또는 `MAP_SYNTHESIS` |
+| claim prompt·관계 정책 | `BUILD_CLAIM_LEDGER` |
+| Task·Coverage 정책 | `PLAN_TASKS` |
+| task prompt | 해당 `EXECUTE_TASK` 이후 |
+| assembler | `ASSEMBLE_DOCUMENT` |
 | citation verifier | `VERIFY_CITATIONS` |
 
 기존 결과는 삭제하지 않고 새 fingerprint 결과를 추가한다.
@@ -534,6 +551,10 @@ deterministic jitter는 job ID 해시로 계산해 재현 가능하게 한다.
 ## 9. 파이프라인 관측 이벤트
 
 모든 단계는 최소 다음 이벤트를 남긴다.
+
+Job 이벤트는 `job_id`, 단조 증가 `sequence`, 상태, 단계, 안전한 메시지, `counter_name`,
+`completed`, `total`, `overall_percentage`, UTC 시각을 가진다. Task DAG 확정 전에는 전체
+퍼센트를 확정하지 않고 단계별 건수만 표시한다. 확정 후 `total`과 전체 퍼센트는 감소하지 않는다.
 
 - `stage_queued`
 - `stage_started`
