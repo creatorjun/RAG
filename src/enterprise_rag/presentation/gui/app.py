@@ -44,7 +44,8 @@ _ERROR_GUIDANCE = {
         "작업 지시를 입력하고 결과 파일이 상대 경로의 .md 파일인지 확인하세요."
     ),
     "MODEL_NOT_CACHED": (
-        "설정 탭에서 로컬 캐시 모델을 선택하거나 모델 다운로드를 완료하세요."
+        "설정 탭에서 로컬 모델을 새로고침해 같은 ID·commit이 `로컬 cache`로 표시되는지 "
+        "확인하세요. 표시된다면 현재 실행이 아니라 선택한 과거 Job의 종료 기록일 수 있습니다."
     ),
     "MODEL_SELECTION_INVALID": (
         "설정 탭에서 모델 ID와 40자리 commit을 다시 선택한 뒤 저장하세요."
@@ -417,6 +418,7 @@ class _DesktopWindow:
         self._result_paths: dict[str, str] = {}
         self._result_fields: dict[str, Any] = {}
         self._result_buttons: dict[str, Any] = {}
+        self._active_error_code: str | None = None
         self._closing = False
         self._executor = ThreadPoolExecutor(
             max_workers=1,
@@ -486,6 +488,8 @@ class _DesktopWindow:
     def _clear_feedback(self, widget: Any) -> None:
         widget.clear()
         widget.setVisible(False)
+        if widget is getattr(self, "_app_feedback", None):
+            self._active_error_code = None
         if widget is getattr(self, "_job_feedback", None):
             self._execution_top_splitter.setMinimumHeight(318)
 
@@ -1242,6 +1246,11 @@ class _DesktopWindow:
 
     def _render_model_catalog(self, catalog: ModelCatalogDto) -> None:
         self._set_catalog_busy(False)
+        if catalog.entries and self._active_error_code in {
+            "MODEL_NOT_CACHED",
+            "MODEL_SNAPSHOT_INVALID",
+        }:
+            self._clear_feedback(self._app_feedback)
         self._model_catalog.setRowCount(len(catalog.entries))
         colors = {
             ModelCompatibility.SUPPORTED: "#137A46",
@@ -1667,6 +1676,7 @@ class _DesktopWindow:
                 self._start_button.setEnabled(True)
             self._show_error(error)
         else:
+            self._clear_feedback(self._app_feedback)
             self._refresh_dashboard()
 
     def _refresh_dashboard(self) -> None:
@@ -1918,7 +1928,12 @@ class _DesktopWindow:
         ):
             detail += " · 취소 완료 후 Worker 종료 확인 중"
         if lease.error_code is not None:
-            detail += f" · 오류 {lease.error_code}"
+            finished = (
+                "종료 시각 없음"
+                if lease.finished_at is None
+                else lease.finished_at.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+            )
+            detail += f" · 이 Job의 마지막 종료 오류 {lease.error_code} · {finished}"
         colors = {
             RunnerHealth.STARTING: "#946200",
             RunnerHealth.HEALTHY: "#137A46",
@@ -1956,6 +1971,7 @@ class _DesktopWindow:
 
     def _show_error(self, error: Exception) -> None:
         message, guidance, code = _error_notice(error)
+        self._active_error_code = code
         self._show_feedback(
             self._app_feedback,
             f"{message}\n{guidance} · 오류 코드: {code}",

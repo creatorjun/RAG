@@ -251,6 +251,10 @@ dashboard를 바로 다시 읽는다. 다른 창과의 경합으로 오류가 �
 `TOKEN_BUDGET_EXCEEDED`는 업데이트된 단계별 분할로 `실패 지점부터 복구`하는 방법을 우선
 안내한다. 최소 batch도 수용하지 못할 때만 context 확대 또는 사용자 추가 지침 축소를 요청한다.
 
+Runner의 terminal 오류 코드는 현재 오류 배너가 아니라 해당 Job·실행 번호의 `마지막 종료 오류`로
+종료 시각과 함께 표시한다. 로컬 모델 새로고침이나 Job 복구가 성공하면 이전 오류 배너를 자동으로
+지워, 과거 `MODEL_NOT_CACHED` 기록을 현재 cache 장애로 오인하지 않게 한다.
+
 `즉시 취소 요청`은 Job을 `CANCELLING`으로 바꾸고 검증된 Worker process group에 `SIGTERM`을
 전달한다. 화면에는 토큰 경계 중단, 정상 종료 유예 시간과 Worker 종료 확인 상태를 표시한다.
 MLX 생성은 다음 token chunk에서 중단하며, 유예 15초를 넘긴 Worker만 자기 watchdog으로

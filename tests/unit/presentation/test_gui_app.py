@@ -46,6 +46,7 @@ class ErrorNoticeTest(unittest.TestCase):
 
         self.assertIn("로컬", message)
         self.assertIn("설정 탭", guidance)
+        self.assertIn("과거 Job", guidance)
         self.assertEqual(code, "MODEL_NOT_CACHED")
 
     def test_unexpected_error_does_not_expose_internal_detail(self) -> None:
