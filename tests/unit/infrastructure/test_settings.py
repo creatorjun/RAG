@@ -145,6 +145,18 @@ class SettingsTest(unittest.TestCase):
         with self.assertRaises(ValidationError):
             Settings.model_validate(value)
 
+    def test_rejects_worker_stale_window_at_or_above_start_timeout(self) -> None:
+        value = _valid_settings()
+        runtime = dict(value["runtime"])
+        runtime.update(
+            worker_start_timeout_seconds=15,
+            worker_heartbeat_seconds=5,
+            worker_missed_heartbeats=3,
+        )
+        value["runtime"] = runtime
+        with self.assertRaises(ValidationError):
+            Settings.model_validate(value)
+
 
 if __name__ == "__main__":
     unittest.main()

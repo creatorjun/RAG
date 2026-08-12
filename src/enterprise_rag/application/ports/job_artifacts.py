@@ -36,3 +36,10 @@ class JobArtifactRepositoryPort(Protocol):
 
     async def read_text(self, job_id: str, relative_path: str) -> str:
         raise NotImplementedError
+
+    async def list_relative_paths(
+        self,
+        job_id: str,
+        prefix: str | None = None,
+    ) -> tuple[str, ...]:
+        raise NotImplementedError

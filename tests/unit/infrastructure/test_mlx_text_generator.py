@@ -46,6 +46,30 @@ class MlxTextGeneratorTest(unittest.TestCase):
         self.assertEqual(generator.model_revision, "a" * 40)
         load.assert_called_once_with("test/model", revision="a" * 40)
 
+    def test_offline_mode_resolves_only_pinned_local_snapshot(self) -> None:
+        generator = MlxTextGenerator(
+            "test/model", "a" * 40, 1024, 128, offline_mode=True
+        )
+        tokenizer = _FakeTokenizer()
+        load = Mock(return_value=(object(), tokenizer))
+        snapshot_download = Mock(return_value="/cache/pinned-model")
+        modules = {
+            "mlx_lm": SimpleNamespace(load=load),
+            "huggingface_hub": SimpleNamespace(snapshot_download=snapshot_download),
+        }
+        with (
+            patch("platform.system", return_value="Darwin"),
+            patch("platform.machine", return_value="arm64"),
+            patch("importlib.import_module", side_effect=lambda name: modules[name]),
+        ):
+            asyncio.run(generator.prepare())
+        snapshot_download.assert_called_once_with(
+            repo_id="test/model",
+            revision="a" * 40,
+            local_files_only=True,
+        )
+        load.assert_called_once_with("/cache/pinned-model")
+
     def test_generates_deterministically_and_strips_reasoning(self) -> None:
         generator = _generator()
         tokenizer = _FakeTokenizer(reject_thinking_option=True)

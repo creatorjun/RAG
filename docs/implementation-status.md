@@ -3,7 +3,7 @@
 
 - 기준일: 2026-08-12
 - 애플리케이션 버전: `0.1.0`
-- 현재 범위: Milestone 1 Job 기반, 폴더 리비전 수직 슬라이스, ADR-0006 Phase 2
+- 현재 범위: Milestone 1 Job 기반, ADR-0006 Phase 2, 기존 Presentation 통합 GUI 기반
 
 ## 1. 완료된 산출물
 
@@ -16,7 +16,7 @@
 - Ruff, mypy strict, pytest, branch coverage 85% gate
 
 기본 런타임 직접 의존성은 Pydantic과 PyYAML을 고정했다. Apple Silicon의 통합 문서 생성용
-`mlx-lm`은 `requirements-mlx.txt`와 `local-mlx` optional dependency에 분리해 고정했다.
+`mlx-lm`과 모델 카탈로그용 `huggingface-hub`는 GUI/MLX optional dependency에 분리해 고정했다.
 BGE-M3, FAISS, 파서 의존성은 대상 Mac 실측과 라이선스 검토가 끝난 뒤 별도 그룹으로 잠근다.
 검증 가능한 `uv` 실행 파일이 현재 환경에 없어 `uv.lock`은 아직 생성하지 않았다.
 
@@ -25,9 +25,9 @@ BGE-M3, FAISS, 파서 의존성은 대상 Mac 실측과 라이선스 검토가 �
 | 계층 | 구현 내용 |
 | --- | --- |
 | Domain | 오류·값 객체, 리비전 상태, DocumentJob 상태 머신·진행 불변 조건 |
-| Application | revision·Job 관리, Evidence·Claim·Task 계획/실행/검증, 결정적 조립과 최종 품질 게이트 |
-| Infrastructure | 설정 loader, MLX·구조화 생성 어댑터, SQLite Job/Event, write-once Job·Task·최종 게이트 저장소, 폴더 workspace |
-| Presentation | `rag doctor`, revision/document 명령, `rag job create/list/status/events/cancel` |
+| Application | revision·Job·모델 카탈로그 관리, Evidence·Claim·Task 계획/실행/검증, 결정적 조립과 최종 품질 게이트 |
+| Infrastructure | 설정 loader, Hugging Face 카탈로그, MLX·구조화 생성 어댑터, SQLite Job/Event, write-once Job·Task·최종 게이트 저장소, mutable runner lease, 폴더 workspace |
+| Presentation | `rag doctor`, revision/document 명령, `rag job create/list/status/events/cancel`, `rag-gui` 실행/설정 탭 |
 | Composition | `bootstrap.py` 단일 조립 지점과 명시적 close 경계 |
 
 AST 기반 아키텍처 테스트가 Domain에서 바깥 계층으로 향하는 import와 Application에서 Infrastructure·Presentation으로 향하는 import를 차단한다.
@@ -58,34 +58,41 @@ AST 기반 아키텍처 테스트가 Domain에서 바깥 계층으로 향하는 
 | M1-06 | 완료 | AST import 경계 테스트 | CI 실행 환경 연결 |
 | M1-07 | 완료 | 프로젝트 리비전 스킬이 애플리케이션 코드 호출 | 공식 validator 재실행 |
 | M1-16 | 완료 | `DocumentJobState`, 허용 전이·terminal·단조 진행 불변 조건 | 없음 |
-| M1-17 | 부분 완료 | `ProgressEventDto`, SQLite 원자 이벤트·counter, CLI 조회 | GUI 실시간 구독 |
+| M1-17 | 부분 완료 | `ProgressEventDto`, SQLite 원자 이벤트·counter, CLI 조회, GUI 2초 polling | 백그라운 구독·대규모 event paging |
 | M1-18 | 완료 | 파일 Job 저장소, 원자 초기화, write-once JSON, path/link guard | 없음 |
 | M1-19 | 완료 | checksum migration, Job CAS, Event·counter 원자 commit, 재개 조회 | 없음 |
-| M1-24 | 부분 완료 | 고정 10단계 Coordinator, 실패·취소·`NEEDS_ATTENTION`, 실제 SQLite 통합 시험 | 실제 단계 어댑터·프로세스 Worker 연결 |
+| M1-22 | 완료 | 파일 lock+runner token 소유권, PID claim, 5초 heartbeat, 3회 누락 stale 판정, launch sequence 회수 | 없음 |
+| M1-24 | 부분 완료 | 고정 10단계 실제 어댑터, Job별 subprocess, 안전 취소·event 기반 멱등 재개 | 모델 생성 호출 중 즉시 취소 |
 | M5-02 | 부분 완료 | text chunk Evidence DTO, 결정 ID, 100% 배정 검사, 전용 파일 저장소 | parser 구조 요소·ACL Evidence |
 | M5-03 | 완료 | Evidence 제한 Claim 추출, 결정 ID, 동일 내용·다중 Evidence 병합, Ledger 저장소 | 없음 |
 | M5-04 | 부분 완료 | 구조화 관계 판정, known-pair·중복 pair 검증, conflict 전달 | 대규모 Claim 후보 축소·평가 보정 |
 | M5-05 | 완료 | Claim 단일 소유, Evidence 100% Coverage, 순환 없는 고정 Task DAG | 없음 |
 | M5-06 | 완료 | TaskPacket·TaskOutput strict 계약과 write-once attempt 저장 | 없음 |
-| M5-07 | 부분 완료 | JSON 전용 MLX 어댑터, 태스크 검증, 실패 태스크만 최대 2회 재작성 | 별도 프로세스 Worker·재시작 attempt 복구 |
+| M5-07 | 부분 완료 | JSON 전용 MLX, Job별 별도 프로세스, heartbeat, 실패 Task만 최대 3회, write-once attempt 복구 | Metal 압력 감시 |
 | M5-08 | 완료 | 계획 순서 기반 Markdown 조립, Evidence→source 변환, 전체 모델 재작성 없음 | 없음 |
-| M5-09 | 부분 완료 | Claim/Evidence/source 100% 게이트, Markdown·marker 검사, draft/report 체크포인트 | 의미 정확도·인용 정확도 평가 세트 |
+| M5-09 | 부분 완료 | Claim/Evidence/source 100% 게이트 통과 후만 revision run·비교 보고서 게시 | 의미 정확도·인용 정확도 평가 세트 |
 | M1-30B | 완료 | after workspace, path guard, overwrite 차단 | OS 배포 ACL runbook |
 | M1-30C | 완료 | 네 상태, hash, text diff, 원자 report | 대용량 binary 성능 시험 |
 | M1-40 | 부분 완료 | 설정·경로·web disabled doctor | 모델·DB·디스크·권한 진단 |
 | M1-43 | 완료 | prepare·compare·finalize CLI와 인수 테스트 | 운영 승인 UI 연동 |
+| M6-20 | 부분 완료 | 기존 `presentation` 내 PySide6 shell, `rag-gui`, headless import·종료 smoke | 단일 instance·macOS packaging |
+| M6-21 | 부분 완료 | 실행/설정 탭, 로컬/원격 HF 카탈로그, exact commit·cache·MLX/메모리 적합성, prompt 설정 CAS, Job 전 재검증 | 다운로드 진행·취소와 실측 benchmark 승인 |
+| M6-22 | 부분 완료 | GUI 시작/재개, 10단계 event, manifest~게시 run 무결성 체크포인트, PID·heartbeat 건강 상태 | 대규모 event paging |
+| M6-23 | 부분 완료 | 최종 품질 게이트와 게시 run·비교 digest를 Dashboard에 노출 | 결과·품질·비교 보고서 열기 |
+| M6-24 | 미착수 | Job snapshot에 알림 정책 고정 | 게시 이후 exactly-once OS 알림 adapter |
 
 ## 3. 검증 결과
 
 | 검사 | 결과 |
 | --- | --- |
-| pytest | 122 passed, 34 subtests passed |
-| branch coverage | 85.43%, 기준 85% 통과 |
+| pytest | 167 passed, 75 subtests passed |
+| branch coverage | 85.36%, 기준 85% 통과 |
 | 프로젝트 스킬 unittest | 4 passed |
 | Ruff | 통과 |
-| mypy strict | 97 source files 통과 |
+| mypy strict | 126 source files 통과 |
 | 아키텍처 import 경계 | 위반 0건 |
 | editable package 설치 | 성공, `rag` 콘솔 스크립트 생성 |
+| PySide6 GUI smoke | offscreen 2탭·모델 카탈로그·Worker 상태 생성과 정상 종료, `rag-gui --help` 성공 |
 | `rag doctor` | development 설정에서 성공, web disabled 확인 |
 | Oracle Linux 9.8 CLI smoke | 입력 9개, added 1, modified 1, removed 1, unchanged 7, finalize 성공 |
 
@@ -123,14 +130,27 @@ AST 기반 아키텍처 테스트가 Domain에서 바깥 계층으로 향하는 
 - Assembler는 계획된 Task·section 순서로만 조립하고 Evidence marker를 source 경로로 바꾼다.
 - 최종 게이트는 Claim/Evidence/source coverage, 구조, marker, 해시를 확인하며 초안과 보고서는
   `derived/assembled-draft.md`, `control/final-validation.json`에 체크포인트한다.
-- 위 컴포넌트는 fake 모델과 실제 파일·SQLite 경계에서 검증됐다. 새 경로의 실제 27B 전체 실행과
-  `data/after` 게시 단계 연결은 아직 완료되지 않았다.
+- 고정 10단계 어댑터를 실제 파일·SQLite·revision workspace에 조립했다. 결정적
+  구조화 생성기를 주입한 통합 시험에서 source manifest부터 `runs/<job_id>`의 생성 문서와
+  비교 보고서까지 실제로 생성했다.
+- GUI/CLI `start`는 파일 lock을 상속한 Job별 subprocess를 생성한다. 단계 event가 이미 commit됐으면
+  다음 단계로, event 전이면 저장된 아티팩트를 재검증한 뒤 멱등 재개한다.
+- launcher가 발급한 runner token을 자식 PID가 claim하고 5초마다 `runner-state.json`의
+  heartbeat를 원자 갱신한다. GUI는 시작·정상·stale·종료·실패와 마지막 heartbeat 경과 시간을
+  표시하며, 새 실행은 OS가 해제한 Job lock을 획득한 경우에만 launch sequence를 교체한다.
+- 오프라인 Job은 pinned Hugging Face snapshot을 로컬 cache에서만 해석한다.
+- 설정 탭은 로컬 Hugging Face cache와 사용자가 명시적으로 요청한 `mlx-community` 최신 검색을
+  제공한다. exact commit, 크기, 양자화, context, 라이선스, gated 여부와 물리 메모리 적합성을
+  표시하며 Job 생성 전에 동일 선택을 다시 검증한다.
+- 현재 장비의 cache된 Qwen 27B snapshot은 16.08GB, 4-bit affine, 최대 context 262,144로
+  인식됐고 보수적 예상 필요량 22.0GiB / 물리 메모리 36.0GiB로 `SUPPORTED` 판정을 받았다.
+- 새 경로의 실제 Qwen 27B 전체 품질·처리량·메모리 회귀 평가는 아직 필요하다.
 
 ## 4. 다음 구현 순서
 
-1. 구현된 유스케이스를 Coordinator의 실제 10단계 어댑터로 조립하고 게이트 통과 후 게시만 허용한다.
-2. MLX 실행을 별도 프로세스 Worker로 옮기고 heartbeat·취소·attempt 재개를 연결한다.
-3. 대규모 Claim 관계 판정의 후보 축소와 batch 예산을 구현하고 실제 27B 평가를 수행한다.
-4. PySide6 GUI에 폴더 선택, Job 생성·실행, 이벤트 복원, 건수 진행률과 완료 알림을 연결한다.
+1. Hugging Face 모델 다운로드의 사전 디스크 검사·파일 진행률·취소·snapshot 재검증을 구현한다.
+2. 모델 생성 호출 중 즉시 취소와 취소 유예 이후 안전한 프로세스 종료를 연결한다.
+3. 게시 run·품질·비교 보고서 화면과 완료 후 exactly-once macOS 알림을 연결한다.
+4. 대규모 Claim 관계 판정의 후보 축소와 batch 예산을 구현하고 실제 27B 평가를 수행한다.
 
 Milestone 2의 BGE 분류와 중복 제거는 위 기반 작업과 대상 Mac 실측 gate를 통과하기 전 production 코드로 추가하지 않는다.

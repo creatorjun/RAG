@@ -639,6 +639,145 @@ class ProgressEventDto:
 제공한다. 이벤트 삽입과 Document Job의 마지막 sequence·percentage 갱신은 같은 SQLite
 트랜잭션이다.
 
+### 9.0.1 Desktop 설정과 실행 대시보드
+
+```python
+@dataclass(frozen=True, slots=True)
+class DesktopSettingsDto:
+    settings_revision: int
+    source_root: str
+    output_root: str
+    model_id: str
+    model_revision: str
+    context_tokens: int
+    max_output_tokens: int
+    additional_system_prompt: str
+    max_task_attempts: int
+    offline_mode: bool
+    notify_on_completion: bool
+
+
+class DesktopSettingsRepositoryPort(Protocol):
+    async def load(self) -> DesktopSettingsDto: ...
+    async def save(
+        self,
+        expected_revision: int,
+        settings: DesktopSettingsDto,
+    ) -> DesktopSettingsDto: ...
+```
+
+저장소는 원자 replace와 revision compare-and-set을 사용한다. GUI는 저장소를 직접 호출하지 않고
+`GetDesktopSettings`, `UpdateDesktopSettings` 유스케이스를 호출한다.
+
+```python
+class ModelCompatibility(StrEnum):
+    SUPPORTED = "SUPPORTED"
+    TIGHT = "TIGHT"
+    TOO_LARGE = "TOO_LARGE"
+    UNSUPPORTED = "UNSUPPORTED"
+    UNKNOWN = "UNKNOWN"
+
+
+@dataclass(frozen=True, slots=True)
+class ModelCatalogEntryDto:
+    model_id: str
+    revision: str
+    origin: ModelCatalogOrigin
+    cached: bool
+    size_bytes: int | None
+    quantization: str
+    context_tokens: int | None
+    license_name: str
+    compatibility: ModelCompatibility
+    compatibility_detail: str
+    local_path: str | None
+    gated: bool
+
+
+class ModelCatalogPort(Protocol):
+    async def list_local(self, query: str, limit: int) -> tuple[ModelCatalogEntryDto, ...]: ...
+    async def search_remote(self, query: str, limit: int) -> tuple[ModelCatalogEntryDto, ...]: ...
+    async def inspect(
+        self,
+        model_id: str,
+        revision: str,
+        local_only: bool,
+    ) -> ModelCatalogEntryDto: ...
+```
+
+모든 카탈로그 entry는 `model_id + 40자리 commit` 정체성을 사용한다. branch, tag, `latest`는
+Job 설정으로 저장하지 않는다. `offline_mode=true`의 inspect는 네트워크 fallback 없이 정확한
+cache snapshot을 요구한다. 원격 검색 결과도 별도 다운로드가 완료되어 `cached=true`가 되기
+전에는 Job을 만들 수 없다. `TOO_LARGE`, `UNSUPPORTED`는 Job 생성 전에
+`MODEL_INCOMPATIBLE`로 거부하며 `TIGHT`, `UNKNOWN`은 경고를 보존한 채 허용한다.
+
+```python
+@dataclass(frozen=True, slots=True)
+class JobCheckpointDto:
+    checkpoint_id: str
+    relative_path: str
+    status: str
+    item_count: int | None
+    resumable: bool
+    detail: str
+
+
+@dataclass(frozen=True, slots=True)
+class JobDashboardDto:
+    job: DocumentJobDto
+    events: tuple[ProgressEventDto, ...]
+    checkpoints: tuple[JobCheckpointDto, ...]
+    runner: RunnerStatusDto | None
+```
+
+체크포인트 상태는 `MISSING`, `SAVED`, `IN_PROGRESS`, `INVALID`다. `SAVED`는 파일 존재가 아니라
+schema·Job ID·digest 검증 성공을 뜻한다. GUI는 이 DTO만 렌더링한다.
+
+```python
+class DocumentJobLauncherPort(Protocol):
+    async def launch(self, job_id: str) -> int: ...
+```
+
+`StartDocumentJob`은 terminal·`CANCELLING`·`NEEDS_ATTENTION` Job을 거부한 뒤 launcher를
+호출한다. POSIX launcher는 Job별 non-blocking file lock을 자식 프로세스에 상속해 동일
+Job의 동시 Worker를 차단한다. process ID는 실행 요청 확인용이며 Job 상태의
+정본은 SQLite와 progress event다.
+
+```python
+class RunnerLifecycle(StrEnum):
+    LAUNCHING = "LAUNCHING"
+    RUNNING = "RUNNING"
+    EXITED = "EXITED"
+    FAILED = "FAILED"
+
+
+class RunnerHealth(StrEnum):
+    STARTING = "STARTING"
+    HEALTHY = "HEALTHY"
+    STALE = "STALE"
+    EXITED = "EXITED"
+    FAILED = "FAILED"
+
+
+@dataclass(frozen=True, slots=True)
+class RunnerLeaseDto:
+    job_id: str
+    runner_token: str
+    launch_sequence: int
+    process_id: int | None
+    lifecycle: RunnerLifecycle
+    started_at: datetime
+    heartbeat_at: datetime
+    finished_at: datetime | None
+    error_code: str | None
+```
+
+launcher는 `.runner.lock` 획득 뒤 `LAUNCHING` lease를 원자 기록하고 token을 자식에게만
+전달한다. Worker는 동일 token과 자신의 PID로 `RUNNING`을 claim해야 하며 다른 token·PID의
+heartbeat와 종료 기록은 `RUNNER_LEASE_CONFLICT`로 거부한다. `runner-state.json`은
+`.runner-state.lock` 아래 원자 replace하며, 손상된 상태는 `RUNNER_LEASE_INVALID`로 처리한다.
+Dashboard의 `STALE`은 관측 판정이며 Job 실패를 자동 commit하지 않는다.
+
 ### 9.1 작업 상태
 
 ```python

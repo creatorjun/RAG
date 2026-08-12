@@ -87,6 +87,14 @@ _REVISION_ERROR_SPECS: dict[str, tuple[ErrorCategory, str]] = {
     "COMPARISON_INCOMPLETE": (ErrorCategory.CONSISTENCY, "비교 보고서가 없거나 완전하지 않습니다."),
     "CONFIG_INVALID": (ErrorCategory.INVALID_INPUT, "프로젝트 설정이 올바르지 않습니다."),
     "INVALID_INPUT": (ErrorCategory.INVALID_INPUT, "입력값이 올바르지 않습니다."),
+    "DESKTOP_SETTINGS_INVALID": (
+        ErrorCategory.INVALID_INPUT,
+        "데스크톱 설정 파일이 올바르지 않습니다.",
+    ),
+    "SETTINGS_REVISION_CONFLICT": (
+        ErrorCategory.CONSISTENCY,
+        "다른 창에서 설정이 변경되었습니다. 설정을 다시 불러오십시오.",
+    ),
     "DEPENDENCY_MISSING": (ErrorCategory.INTERNAL, "필수 Python 의존성이 설치되지 않았습니다."),
     "IO_FAILURE": (ErrorCategory.INTERNAL, "문서 작업 중 파일 시스템 오류가 발생했습니다."),
     "SOURCE_BUSY": (ErrorCategory.TRANSIENT_SOURCE, "문서를 읽는 동안 원본이 변경되었습니다."),
@@ -131,6 +139,30 @@ _REVISION_ERROR_SPECS: dict[str, tuple[ErrorCategory, str]] = {
         ErrorCategory.CONSISTENCY,
         "최종 문서 품질 보고서가 없거나 문서와 일치하지 않습니다.",
     ),
+    "JOB_DEFINITION_INVALID": (
+        ErrorCategory.CONSISTENCY,
+        "저장된 작업 정의 또는 실행 설정을 검증할 수 없습니다.",
+    ),
+    "JOB_NOT_RUNNABLE": (
+        ErrorCategory.INVALID_INPUT,
+        "현재 상태에서는 작업을 시작하거나 재개할 수 없습니다.",
+    ),
+    "JOB_ALREADY_RUNNING": (
+        ErrorCategory.CONSISTENCY,
+        "동일한 작업 실행 프로세스가 이미 동작 중입니다.",
+    ),
+    "JOB_LAUNCH_FAILED": (
+        ErrorCategory.INTERNAL,
+        "작업 실행 프로세스를 시작하지 못했습니다.",
+    ),
+    "RUNNER_LEASE_INVALID": (
+        ErrorCategory.DATA_CORRUPTION,
+        "저장된 작업 실행 상태를 검증할 수 없습니다.",
+    ),
+    "RUNNER_LEASE_CONFLICT": (
+        ErrorCategory.CONSISTENCY,
+        "작업 실행 프로세스의 소유권 상태가 일치하지 않습니다.",
+    ),
     "TOKEN_BUDGET_EXCEEDED": (
         ErrorCategory.INVALID_INPUT,
         "모델 요청이 승인된 컨텍스트 예산을 초과합니다.",
@@ -150,6 +182,42 @@ _REVISION_ERROR_SPECS: dict[str, tuple[ErrorCategory, str]] = {
     "MODEL_GENERATION_FAILED": (
         ErrorCategory.MODEL_OUTPUT,
         "로컬 모델이 통합 문서를 생성하지 못했습니다.",
+    ),
+    "MODEL_NOT_CACHED": (
+        ErrorCategory.INVALID_INPUT,
+        "오프라인 모드에서 선택한 모델 revision을 로컬 캐시에서 찾을 수 없습니다.",
+    ),
+    "MODEL_SELECTION_INVALID": (
+        ErrorCategory.INVALID_INPUT,
+        "선택한 Hugging Face 모델 또는 commit revision을 확인할 수 없습니다.",
+    ),
+    "MODEL_INCOMPATIBLE": (
+        ErrorCategory.INVALID_INPUT,
+        "선택한 모델은 현재 MLX 런타임 또는 장비 메모리 기준과 호환되지 않습니다.",
+    ),
+    "MODEL_ACCESS_DENIED": (
+        ErrorCategory.INVALID_INPUT,
+        "선택한 Hugging Face 모델에 접근할 권한이 없습니다.",
+    ),
+    "MODEL_DOWNLOAD_CONFLICT": (
+        ErrorCategory.CONSISTENCY,
+        "다른 모델 다운로드가 이미 진행 중입니다.",
+    ),
+    "MODEL_DOWNLOAD_DISK_SPACE": (
+        ErrorCategory.RESOURCE_PRESSURE,
+        "모델을 안전하게 다운로드할 디스크 여유 공간이 부족합니다.",
+    ),
+    "MODEL_DOWNLOAD_CANCELLED": (
+        ErrorCategory.CANCELLED,
+        "모델 다운로드가 안전하게 취소되었습니다.",
+    ),
+    "MODEL_DOWNLOAD_FAILED": (
+        ErrorCategory.TRANSIENT_NETWORK,
+        "Hugging Face 모델 다운로드를 완료하지 못했습니다.",
+    ),
+    "MODEL_SNAPSHOT_INVALID": (
+        ErrorCategory.DATA_CORRUPTION,
+        "다운로드된 모델 snapshot을 검증할 수 없습니다.",
     ),
     "MODEL_OUTPUT_EMPTY": (
         ErrorCategory.MODEL_OUTPUT,

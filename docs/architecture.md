@@ -32,6 +32,10 @@ flowchart LR
 - 태스크별 품질 검증, 결정적 문서 조립, GUI 진행 이벤트와 완료 알림
 - 체크포인트, 재시도, 감사, 메트릭, 백업·복구
 
+GUI는 별도 애플리케이션 버전이나 V2 파이프라인을 만들지 않는다. 기존 Presentation 계층의
+PySide6 진입점이며 CLI와 같은 Application API를 사용한다. 화면 정보 구조와 설정 경계는
+[desktop-gui.md](desktop-gui.md)를 따른다.
+
 ### 2.2 시스템 외부 책임
 
 - 소스 시스템의 원본 수명 주기, 원본 ACL, 자격정보, 승인된 파일 내보내기
@@ -91,6 +95,10 @@ Coordinator는 장기 생존 프로세스이며 다음 리소스를 소유한다
 - 설정 스냅샷과 파이프라인 지문
 - SQLite 연결 풀의 단일 쓰기 조정자
 - 작업 큐, 리스, 체크포인트
+
+운영 YAML은 보안·배포 경계이고 `var/config/desktop-settings.json`은 다음 Job의 사용자 기본값이다.
+Job 시작 시 두 설정을 해석해 불변 snapshot을 만들므로 GUI에서 모델이나 프롬프트를 바꿔도 실행
+중인 Job에는 영향을 주지 않는다.
 - 워커 프로세스 생성·종료·상태 감시
 - 외부 HTTP 클라이언트와 egress 정책
 - `data/before`의 읽기 전용 루트와 현재 `data/after` run 경계
@@ -104,6 +112,17 @@ Coordinator는 MLX 또는 BGE 모델을 import하거나 적재하지 않는다. 
 Coordinator는 대화 세션을 작업 상태로 간주하지 않는다. Worker 요청은 불변 TaskPacket이며
 결과, attempt, 검증 보고서는 SQLite와 파일 아티팩트에 저장한다. 품질 게이트를 통과하기 전에는
 `data/after/runs`에 게시 run을 준비하지 않는다.
+
+현재 단일 호스트 수직 슬라이스는 Job별 subprocess에 `.runner.lock`을 상속하고 launcher가 발급한
+runner token을 자식 PID가 claim한다. Worker는 `runner-state.json`을 5초마다 원자 갱신한다.
+제어 plane은 3회 누락을 `STALE`로 관측하되 SQLite Job 상태를 추측으로 완료·실패 처리하지 않는다.
+OS가 비정상 종료 프로세스의 lock을 해제한 뒤에만 다음 launcher가 새 launch sequence를 만들 수 있다.
+
+모델 탐색은 `ModelCatalogPort` 뒤에 둔다. 로컬 cache scan은 네트워크 없이 수행하고, 원격
+Hugging Face 검색은 GUI에서 오프라인 모드를 해제한 뒤 명시적으로 요청할 때만 수행한다.
+검색 결과는 MLX 모델 ID와 정확한 commit으로 고정하며 크기·양자화·context·라이선스와 물리
+메모리 기반 적합성을 DTO로 반환한다. Coordinator는 Job 생성 직전에 선택을 재검증하고
+Worker는 Job snapshot에 저장된 동일 commit만 적재한다.
 
 ### 3.2 Track A Worker Process
 

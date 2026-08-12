@@ -24,6 +24,37 @@
 
 비밀값은 병합 대상이 아니며 웹 검색이 활성화된 경우에만 `secret_ref`를 통해 Coordinator가 조회한다. 문서 폴더 스킬과 모델 워커는 비밀 참조를 받을 수 없다. CLI override는 벤치마크와 운영자가 승인한 제한 항목에만 허용한다.
 
+### 2.1 GUI 사용자 설정과 실행 스냅샷
+
+환경 YAML은 배포·보안 상한이고 GUI가 저장하는 `var/config/desktop-settings.json`은 다음 Job의
+사용자 기본값이다. GUI 설정은 허용된 폴더, 모델, 추가 프롬프트와 실행 정책만 변경할 수 있으며
+web egress, Evidence 제한, 품질 게이트, 경로 보안 플래그를 덮어쓸 수 없다.
+
+```text
+운영 YAML 상한
+→ GUI 사용자 기본값
+→ Job 생성 시 유효성 검사·모델 revision 해석
+→ immutable Job settings snapshot
+```
+
+GUI 설정은 `settings_revision` compare-and-set으로 저장한다. 실행 중 설정 변경은 새 Job에만
+적용된다. 모델의 branch/tag 또는 `latest` 표시는 Job 생성 전에 정확한 Hugging Face commit
+revision과 파일 hash로 해석하며 해석되지 않은 모델로 Job을 시작하지 않는다.
+
+사용자 추가 시스템 지침은 고정 보안·Evidence 정책 뒤에만 합성한다. 빈 값과 최대 20,000자를
+허용하되 고정 정책을 대체하거나 도구·네트워크·Evidence 권한을 확장하지 못한다. 결합된 prompt의
+정규 hash를 Job snapshot에 기록한다.
+
+`offline_mode=true`인 Job Worker는 Hugging Face에 요청하지 않고 고정된 model ID·commit을
+로컬 cache에서만 해석한다. cache miss는 암묵적 다운로드가 아니라 `MODEL_NOT_CACHED`로
+실패한다. 다운로드를 허용할 때만 새 Job 설정에서 오프라인 모드를 해제한다.
+
+설정 탭의 `최신 모델 검색`도 `offline_mode=false`일 때 사용자가 명시적으로 눌러야만
+`mlx-community` 공개 카탈로그에 접근한다. 검색 결과의 branch/tag는 Job에 저장하지 않고 응답의
+정확한 40자리 commit을 사용한다. `offline_mode=false`는 자동 다운로드 동의가 아니며, 현재
+구현에서는 별도 다운로드 단계가 완료되기 전까지 조회·선택·검증만 제공하며, cache되지 않은
+원격 모델의 Job 생성과 Worker의 숨은 자동 다운로드를 차단한다.
+
 ## 3. 전체 설정 기준안
 
 ```yaml
@@ -236,7 +267,8 @@ backup:
 ### 4.2 런타임과 메모리
 
 - `max_parallel_llm_jobs`는 대상 장비에서 1만 허용한다.
-- heartbeat miss 시간은 worker start timeout보다 짧아야 한다.
+- `worker_heartbeat_seconds * worker_missed_heartbeats`는
+  `worker_start_timeout_seconds`보다 작아야 한다. 현재 기본값은 15초와 30초다.
 - `critical < pressure < recovery`를 만족해야 한다.
 - batch minimum은 1이고 기본 batch 이하다.
 

@@ -55,22 +55,32 @@ terminal 상태이며 다른 실행 상태로 되돌릴 수 없다. `NEEDS_ATTEN
 ```text
 var/jobs/<job_id>/
 ├── job.json
+├── definition.json
 ├── source-manifest.json
-├── normalized/
-├── evidence/
-├── claim-ledger.json
-├── duplicate-relations.json
-├── coverage-matrix.json
-├── task-plan.json
+├── evidence/index.json
+├── control/claim-ledger.json
+├── control/task-plan.json
 ├── tasks/<task_id>/attempt-001/output.json
 ├── tasks/<task_id>/attempt-001/validation.json
 ├── derived/assembled-draft.md
 ├── control/final-validation.json
-└── events.jsonl
+├── control/publish-result.json
+├── runner-state.json
+├── .runner-state.lock
+├── .runner.lock
+└── runner.log
 ```
 
-각 파일은 schema version, Job ID, 생성 시각, 입력 해시를 가진다. 완료된 아티팩트는 in-place로
-수정하지 않고 새 attempt를 기록한다.
+상태·진행 이벤트는 파일이 아니라 SQLite에 순서 번호와 함께 저장한다. 각 구조화
+아티팩트는 schema version과 Job ID를 포함하고, 입력·파이프라인 hash로 같은 실행의
+결과임을 재검증한다. 완료된 아티팩트는 in-place로 수정하지 않고 새 attempt를 기록한다.
+
+`runner-state.json`은 체크포인트가 아니라 프로세스 관측용 가변 상태다. launcher가 Job별
+`.runner.lock`을 먼저 획득하고 새 runner token과 launch sequence를 기록한다. 자식 Worker는
+같은 lock descriptor를 상속한 뒤 token·PID를 claim하고 실행 중 주기적으로 heartbeat를
+원자 갱신한다. 정상 종료와 오류 종료는 각각 `EXITED`, `FAILED`로 기록하며, 비정상 종료로
+heartbeat가 3회 누락되면 Dashboard가 `STALE`로 판정한다. 다음 실행은 OS가 해제한
+`.runner.lock`을 획득한 경우에만 이전 stale 관측 상태를 새 sequence로 교체할 수 있다.
 
 ## 6. Claim과 중복 관계
 
@@ -139,19 +149,23 @@ Task DAG 확정 전에는 단계별 건수와 `분석 중` 상태를 표시한�
 
 ## 11. GUI 계약
 
-GUI는 PySide6 기반 로컬 프로세스로 구현하며 Application 유스케이스만 호출한다.
+GUI는 별도 V2를 만들지 않고 기존 `presentation` 계층에 PySide6 기반 로컬 프로세스로 통합하며
+Application 유스케이스만 호출한다. 상세 화면 계약은 [desktop-gui.md](desktop-gui.md)를 따른다.
 
-1. 원본 폴더 선택과 읽기·중첩·지원 형식 검사
-2. 작업 목적, 결과명, 필수 주제 입력
-3. 원본·Evidence·Claim·예상 Task 수 계획 검토
-4. 단계별 완료/전체 건수, 현재 태스크, 경과 시간 표시
-5. 완료·검토 필요·실패 결과와 보고서 표시
+1. `설정` 탭에서 원본·결과 폴더, 고정 모델 revision, 추가 시스템 지침과 실행 정책 관리
+2. `실행` 탭에서 Job 생성·시작·취소·재개
+3. 원본·Evidence·Claim·Task 계획과 품질 상태 검토
+4. 단계별 완료/전체 건수, 현재 태스크, 경과 시간과 event sequence 표시
+5. 체크포인트별 저장·무결성·재개 가능 상태 표시
+6. 완료·검토 필요·실패 결과와 보고서 표시
 
 MLX Worker는 별도 프로세스가 소유한다. GUI를 닫았다 다시 열어도 SQLite Job과 Event를 읽어
 상태를 복원한다. 시스템 완료 알림은 게시 파일과 매니페스트가 모두 커밋된 뒤 발생한다.
 
 ## 12. 취소와 복구
 
-취소 요청은 `CANCELLING` 이벤트를 먼저 영속화한다. Worker는 현재 생성 요청을 종료하고 미완료
-attempt를 실패로 기록한다. 검증된 이전 Task 결과는 보존한다. 재개 시 입력 스냅샷 해시와
-파이프라인 지문이 같을 때만 완료 Task를 재사용한다.
+취소 요청은 Job을 `CANCELLING`으로 원자 전이한다. Worker는 현재 MLX 호출이 끝나는
+안전 경계에서 새 이벤트를 기록하지 않고 `CANCELLED`로 확정한다. 검증된 이전 Task
+결과는 보존한다. 재개 시 입력 스냅샷 해시와 파이프라인 지문이 같을 때만 완료
+Task와 유효한 attempt를 재사용한다. 단계 완료 event까지 commit된 경우 다음 단계로
+이동하고, event 전에 중단된 멱등 단계는 저장된 아티팩트를 재검증한다.

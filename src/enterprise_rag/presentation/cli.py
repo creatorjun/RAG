@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import hashlib
 import importlib.util
 import json
 import sys
@@ -11,7 +10,7 @@ from collections.abc import Sequence
 from dataclasses import asdict
 from pathlib import Path
 
-from enterprise_rag.application.dto.jobs import CreateDocumentJobDto, DocumentJobDto
+from enterprise_rag.application.dto.jobs import DocumentJobDto
 from enterprise_rag.application.dto.long_document import LongDocumentPlanDto
 from enterprise_rag.application.dto.progress import IntegrationProgress
 from enterprise_rag.application.dto.revision import (
@@ -25,7 +24,7 @@ from enterprise_rag.bootstrap import (
     build_application,
     build_job_application,
 )
-from enterprise_rag.domain.errors import ApplicationError, revision_error
+from enterprise_rag.domain.errors import ApplicationError
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -54,7 +53,7 @@ def _build_parser() -> argparse.ArgumentParser:
     create_job.add_argument("--output", default="integrated-technical-guide.md")
     list_jobs = job_commands.add_parser("list")
     list_jobs.add_argument("--limit", type=int, default=100)
-    for name in ("status", "events", "cancel"):
+    for name in ("status", "events", "start", "cancel"):
         job_command = job_commands.add_parser(name)
         job_command.add_argument("--job-id", required=True)
         if name == "events":
@@ -143,16 +142,6 @@ def _serialize_job(value: DocumentJobDto) -> dict[str, object]:
     }
 
 
-def _pipeline_fingerprint(application: JobApplication) -> str:
-    payload = json.dumps(
-        application.configuration.settings.model_dump(mode="json"),
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-
 def _print_integration_progress(value: IntegrationProgress) -> None:
     counter = ""
     if value.completed is not None and value.total is not None:
@@ -204,16 +193,13 @@ async def _execute_job(
     args: argparse.Namespace,
 ) -> dict[str, object]:
     if args.job_command == "create":
-        try:
-            request = CreateDocumentJobDto(
-                source_root=str(args.source_root.expanduser().resolve(strict=False)),
+        return _serialize_job(
+            await application.create_configured_document_job.execute(
                 instruction=args.instruction,
                 output_relative_path=args.output,
-                pipeline_fingerprint=_pipeline_fingerprint(application),
+                source_root=str(args.source_root.expanduser().resolve(strict=False)),
             )
-        except ValueError as error:
-            raise revision_error("INVALID_INPUT") from error
-        return _serialize_job(await application.create_document_job.execute(request))
+        )
     if args.job_command == "list":
         jobs = await application.list_document_jobs.execute(args.limit)
         return {"jobs": [_serialize_job(job) for job in jobs]}
@@ -223,6 +209,12 @@ async def _execute_job(
         return _serialize_job(
             await application.request_document_job_cancellation.execute(args.job_id)
         )
+    if args.job_command == "start":
+        launched = await application.start_document_job.execute(args.job_id)
+        return {
+            **_serialize_job(launched.job),
+            "process_id": launched.process_id,
+        }
     events = await application.list_document_job_events.execute(
         args.job_id,
         args.after_sequence,

@@ -336,9 +336,9 @@
 | M6-09 | 4시간 mixed soak | 전체 | stability gate |
 | M6-10 | 전체 코퍼스 dry run | 전체 | capacity report |
 | M6-11 | folder permission·finalized run restore drill | M1-30B, M6-05 | 불변성·복구 |
-| M6-20 | PySide6 application shell | M1-17, M1-24 | GUI import·종료 |
-| M6-21 | source folder·instruction 화면 | M6-20, M1-30 | 경로 보안·Job 생성 |
-| M6-22 | 계획 검토·진행 화면 | M6-21, M1-19 | event 복원·건수 표시 |
+| M6-20 | 기존 Presentation 통합 PySide6 application shell | M1-17, M1-24 | GUI import·종료·단일 instance |
+| M6-21 | 실행/설정 탭, folder·model·prompt 설정 | M6-20, M1-30 | 설정 CAS·Job snapshot |
+| M6-22 | 진행·체크포인트·event 상세 화면 | M6-21, M1-19 | event 복원·건수·무결성 표시 |
 | M6-23 | 결과·품질 보고서 화면 | M6-22, M5-16 | 상태별 동작 |
 | M6-24 | 완료 알림 adapter | M6-23 | 게시 후 단일 알림 |
 

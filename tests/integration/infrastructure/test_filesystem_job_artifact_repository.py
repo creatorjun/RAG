@@ -41,6 +41,12 @@ class FilesystemJobArtifactRepositoryTest(unittest.TestCase):
             )
             self.assertEqual(written, "tasks/security/request.json")
             self.assertEqual(value["task_id"], "security")
+            paths = asyncio.run(repository.list_relative_paths(job.job_id, "tasks"))
+            self.assertEqual(paths, ("tasks/security/request.json",))
+            self.assertEqual(
+                asyncio.run(repository.list_relative_paths(job.job_id, "missing")),
+                (),
+            )
             self.assertTrue((var_root / "jobs" / job.job_id / "job.json").is_file())
             with self.assertRaises(ApplicationError) as captured:
                 asyncio.run(
@@ -67,6 +73,9 @@ class FilesystemJobArtifactRepositoryTest(unittest.TestCase):
             with self.assertRaises(ApplicationError) as captured:
                 asyncio.run(repository.read_json("invalid", "job.json"))
             self.assertEqual(captured.exception.code, "INVALID_JOB_ID")
+            with self.assertRaises(ApplicationError) as captured:
+                asyncio.run(repository.list_relative_paths(job.job_id, "../escape"))
+            self.assertEqual(captured.exception.code, "PATH_ESCAPE")
 
     def test_rejects_symlink_in_artifact_path(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

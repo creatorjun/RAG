@@ -51,9 +51,25 @@ class RunDocumentJob:
             return DocumentJobDto.from_domain(cancelled)
         if job.state is DocumentJobState.NEEDS_ATTENTION:
             return DocumentJobDto.from_domain(job)
-        start_index = self._start_index(job.state)
+        last_event = None
+        if job.last_event_sequence:
+            events = await self._events.list_after(job_id, job.last_event_sequence - 1)
+            if events and events[-1].sequence == job.last_event_sequence:
+                last_event = events[-1]
+        start_index = self._start_index(job.state, None if last_event is None else last_event.stage)
         for index in range(start_index, len(self._stages)):
             stage = self._stages[index]
+            current = await self._jobs.get(job_id)
+            if current is None:
+                raise revision_error("JOB_NOT_FOUND", {"job_id": job_id})
+            if current.state is DocumentJobState.CANCELLING:
+                cancelled = await self._jobs.transition(
+                    job_id,
+                    DocumentJobState.CANCELLING,
+                    DocumentJobState.CANCELLED,
+                )
+                return DocumentJobDto.from_domain(cancelled)
+            job = current
             if job.state is not stage.state:
                 job = await self._jobs.transition(job_id, job.state, stage.state)
             try:
@@ -64,6 +80,19 @@ class RunDocumentJob:
             except Exception as error:
                 await self._mark_failed(job_id, stage.state)
                 raise revision_error("IO_FAILURE", {"job_id": job_id}) from error
+            current = await self._jobs.get(job_id)
+            if current is None:
+                raise revision_error("JOB_NOT_FOUND", {"job_id": job_id})
+            if current.state is DocumentJobState.CANCELLING:
+                cancelled = await self._jobs.transition(
+                    job_id,
+                    DocumentJobState.CANCELLING,
+                    DocumentJobState.CANCELLED,
+                )
+                return DocumentJobDto.from_domain(cancelled)
+            if current.state is not stage.state:
+                raise revision_error("JOB_STATE_CONFLICT", {"job_id": job_id})
+            job = current
             percentage = min(99, round((index + 1) * 99 / len(self._stages)))
             sequence = job.last_event_sequence + 1
             event = ProgressEventDto(
@@ -99,11 +128,14 @@ class RunDocumentJob:
         return DocumentJobDto.from_domain(completed)
 
     @staticmethod
-    def _start_index(state: DocumentJobState) -> int:
+    def _start_index(state: DocumentJobState, last_event_stage: str | None) -> int:
         if state is DocumentJobState.CREATED:
             return 0
         try:
-            return _ACTIVE_FLOW.index(state)
+            index = _ACTIVE_FLOW.index(state)
+            if last_event_stage == state.value:
+                return index + 1
+            return index
         except ValueError as error:
             raise revision_error("JOB_STATE_CONFLICT") from error
 

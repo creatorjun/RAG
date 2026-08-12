@@ -369,7 +369,7 @@ prepare/compare/finalize`, `document plan/integrate`, `job create/list/status/ev
 | `rag validate` | 인제스천 실행의 검증 작업 생성 | 작업 큐 생성 |
 | `rag run status` | 실행과 단계 상태 조회 | 없음 |
 | `rag job create` | 원본 폴더와 작업 지시로 Job 생성 | Job ID |
-| `rag job run` | 계획된 Job 실행 또는 재개 | 진행 이벤트 |
+| `rag job start` | Job별 로컬 Worker 시작 또는 중단 지점 재개 | process ID |
 | `rag job cancel` | 안전 취소 요청 | Job 상태 |
 | `rag run cancel` | 실행 취소 요청 | 취소 플래그 설정 |
 | `rag review list` | 승인 대기 목록 | 없음 |
@@ -391,9 +391,18 @@ prepare/compare/finalize`, `document plan/integrate`, `job create/list/status/ev
 
 ### 5.3 로컬 GUI
 
-`presentation/gui`는 PySide6 View와 ViewModel만 포함한다. 폴더 선택, Job 생성, 진행 이벤트
-조회, 결과 열기, 완료 알림을 제공하며 파일 시스템·SQLite·MLX를 직접 호출하지 않는다.
-GUI와 CLI는 같은 Application 유스케이스를 사용한다.
+`presentation/gui`는 기존 구조 안의 PySide6 View와 ViewModel만 포함한다. 메인 윈도우는
+`실행`·`설정` 탭으로 구성한다. 설정 탭은 폴더, Hugging Face 모델의 고정 commit revision,
+사용자 추가 시스템 지침과 실행 정책을 관리한다. 실행 탭은 Job 제어, 건수 진행률, 이벤트,
+체크포인트 무결성·재개 가능 상태와 품질 보고서를 표시한다.
+
+GUI는 파일 시스템·SQLite·Hugging Face·MLX를 직접 호출하지 않고 CLI와 같은 Application
+유스케이스를 사용한다. 화면별 상세 계약은 [desktop-gui.md](desktop-gui.md)를 따른다.
+
+`ModelCatalogPort`는 로컬 cache 탐색, 명시적 원격 검색과 정확한 선택 검증을 분리한다.
+`HuggingFaceModelCatalog`만 `huggingface_hub`를 import하며 GUI는 `BrowseLocalModels`,
+`SearchHuggingFaceModels`, `InspectModelSelection`을 백그라운드에서 호출한다. Job 생성은
+동일 `InspectModelSelection.validate_for_job`을 재호출해 UI 검증 결과를 신뢰 경계로 사용하지 않는다.
 
 ## 6. Bootstrap과 의존성 조립
 
@@ -426,6 +435,14 @@ GUI와 CLI는 같은 Application 유스케이스를 사용한다.
 - JSON checkpoint는 write-once이며 기존 파일 덮어쓰기 금지
 - 상대 `.json` 경로만 허용하고 link·경로 탈출 차단
 - Job 상태 변경은 이 저장소가 아니라 DocumentJobRepository가 담당
+
+#### `FilesystemRunnerLeaseRepository`
+
+- Job별 `.runner-state.lock` 아래 `runner-state.json`을 원자 replace
+- runner token·PID 소유권, 단조 heartbeat 시각과 launch sequence 검증
+- 불변 Job 아티팩트와 분리된 운영 관측 상태만 저장
+- 실제 동시 실행 차단은 자식 프로세스가 상속한 `.runner.lock`이 담당
+- terminal lease의 동일 종료 기록만 멱등 허용하고 다른 소유자의 갱신은 거부
 
 #### `FilesystemEvidenceRepository`
 

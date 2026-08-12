@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from enterprise_rag.application.dto.job_pipeline import JobStageResultDto
+from enterprise_rag.application.dto.progress import ProgressEventDto
 from enterprise_rag.application.use_cases.run_document_job import RunDocumentJob
 from enterprise_rag.domain.errors import ApplicationError, revision_error
 from enterprise_rag.domain.jobs import DocumentJob, DocumentJobState
@@ -55,6 +56,20 @@ class _Stage:
             counter_name="stages",
             needs_attention=self.needs_attention,
         )
+
+
+@dataclass
+class _CancellingStage:
+    state: DocumentJobState
+    repository: SqliteDocumentJobRepository
+
+    async def execute(self, job_id: str) -> JobStageResultDto:
+        await self.repository.transition(
+            job_id,
+            self.state,
+            DocumentJobState.CANCELLING,
+        )
+        return JobStageResultDto("안전 취소 지점 도달", 1, 1, "stages")
 
 
 class DocumentJobOrchestratorTest(unittest.TestCase):
@@ -224,6 +239,62 @@ class DocumentJobOrchestratorTest(unittest.TestCase):
                     ).execute(unexpected.job_id)
                 )
             self.assertEqual(captured.exception.code, "IO_FAILURE")
+
+    def test_resume_skips_stage_whose_event_was_already_committed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repository = SqliteDocumentJobRepository(
+                Path(temporary).resolve() / "metadata.sqlite3",
+                _FixedClock(),
+            )
+            job = DocumentJob("job-" + "4" * 32)
+            asyncio.run(repository.create(job))
+            asyncio.run(
+                repository.transition(
+                    job.job_id,
+                    DocumentJobState.CREATED,
+                    DocumentJobState.INSPECTING,
+                )
+            )
+            asyncio.run(
+                repository.publish(
+                    ProgressEventDto(
+                        10,
+                        DocumentJobState.INSPECTING.value,
+                        "검사 완료",
+                        1,
+                        1,
+                        "stages",
+                        job.job_id,
+                        1,
+                    )
+                )
+            )
+            stages = tuple(_Stage(state) for state in _ACTIVE_STATES)
+            result = asyncio.run(
+                RunDocumentJob(repository, repository, stages).execute(job.job_id)
+            )
+            self.assertEqual(result.state, DocumentJobState.COMPLETED)
+            self.assertEqual(stages[0].calls, 0)
+            self.assertEqual([stage.calls for stage in stages[1:]], [1] * 9)
+
+    def test_confirms_cancellation_at_stage_boundary_without_publishing_event(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repository = SqliteDocumentJobRepository(
+                Path(temporary).resolve() / "metadata.sqlite3",
+                _FixedClock(),
+            )
+            job = DocumentJob("job-" + "5" * 32)
+            asyncio.run(repository.create(job))
+            stages = (
+                _CancellingStage(DocumentJobState.INSPECTING, repository),
+                *tuple(_Stage(state) for state in _ACTIVE_STATES[1:]),
+            )
+            result = asyncio.run(
+                RunDocumentJob(repository, repository, stages).execute(job.job_id)
+            )
+            self.assertEqual(result.state, DocumentJobState.CANCELLED)
+            self.assertEqual(asyncio.run(repository.list_after(job.job_id)), ())
+            self.assertEqual([stage.calls for stage in stages[1:]], [0] * 9)
 
 
 if __name__ == "__main__":

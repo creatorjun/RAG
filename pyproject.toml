@@ -17,7 +17,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+gui = [
+  "huggingface-hub>=1.0,<2.0",
+  "PySide6>=6.8,<7.0",
+]
 local-mlx = [
+  "huggingface-hub>=1.0,<2.0",
   "mlx-lm>=0.31.3,<0.32",
 ]
 dev = [
@@ -32,6 +37,7 @@ dev = [
 
 [project.scripts]
 rag = "enterprise_rag.presentation.cli:main"
+rag-gui = "enterprise_rag.presentation.gui.app:main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
@@ -49,6 +55,7 @@ source = ["enterprise_rag"]
 omit = [
   "*/__main__.py",
   "*/application/ports/*",
+  "*/presentation/gui/app.py",
 ]
 
 [tool.coverage.report]

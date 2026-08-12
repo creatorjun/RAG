@@ -17,6 +17,10 @@ runtime:
   max_parallel_llm_jobs: 1
   parse_concurrency: 2
   network_concurrency: 2
+  worker_start_timeout_seconds: 30
+  worker_heartbeat_seconds: 5
+  worker_missed_heartbeats: 3
+  model_download_reserve_bytes: 5368709120
 sources:
   max_file_bytes: 2147483648
   text_max_file_bytes: 134217728

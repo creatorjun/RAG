@@ -11,6 +11,7 @@ source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -r requirements-dev.txt
 python -m pip install -r requirements-mlx.txt
+python -m pip install -r requirements-gui.txt
 python -m pip install -e .
 ```
 
@@ -36,9 +37,10 @@ rag revision finalize --run-id 20260810t120000z-oracle
 rag document integrate
 ```
 
-이 명령은 아직 Evidence·Claim·Task 품질 게이트 경로로 교체되지 않았습니다. 새 경로의 계약과
-체크포인트는 구현됐지만 Coordinator 실제 단계와 게시가 연결될 때까지 운영 정본 생성에는
-사용하지 않습니다. 현재 상태는 [구현 상태](docs/implementation-status.md)를 기준으로 합니다.
+이 명령은 기존 호환 map/reduce 경로입니다. 신규 Job 경로는 Evidence·Claim·Task
+품질 게이트와 결정적 조립, 게시 run까지 연결됐지만 실제 27B 전체 품질·용량
+평가를 통과하기 전에는 운영 정본으로 확정하지 않습니다. 현재 상태는
+[구현 상태](docs/implementation-status.md)를 기준으로 합니다.
 
 실행 중에는 문서 탐색, 청크 분할, 모델 로딩, 생성 배치, 저장 및 비교 단계가
 `[ 45%] 통합 문서를 생성하는 중 (2/8)` 형식으로 표시됩니다. 최종 JSON 결과는 기존과
@@ -64,6 +66,27 @@ rag document integrate \
 `.toml`, `.ini`, `.xml`입니다. `data/before`는 변경하지 않으며 모델에는 파일·셸·도구 실행
 권한을 부여하지 않습니다.
 
+## 데스크톱 GUI
+
+기존 Application 구조에 통합된 독립 PySide6 프로그램을 실행합니다.
+
+```bash
+rag-gui --project-root .
+```
+
+메인 화면은 `실행`과 `설정` 탭으로 구성됩니다. 설정 탭은 원본·결과 폴더, 로컬 cache 또는
+Hugging Face 최신 MLX 모델 검색, 고정 commit revision, 모델 크기·양자화·context·라이선스·
+장비 적합성, 사용자 추가 시스템 지침과 실행 정책을 관리합니다. 원격 검색은 오프라인 모드를
+명시적으로 해제한 경우에만 실행되며, 원격 모델은 다운로드 단계가 완료되기 전에는 Job에
+사용할 수 없습니다. 실행 탭은 Job 생성·취소, 전체 진행률, 단계 이벤트,
+검증된 체크포인트와 Worker PID·heartbeat·건강 상태를 표시합니다.
+
+Job을 생성한 뒤 `파이프라인 시작/재개`를 누르면 GUI와 분리된 로컬 실행 프로세스가
+고정 10단계를 수행합니다. 프로세스 소유권은 Job별 파일 lock과 runner token으로 보호하고,
+heartbeat가 3회 누락되면 GUI가 `STALE`로 표시합니다. Job 생성 전에 선택 모델의 정확한 commit,
+로컬 cache와 장비 적합성을 다시 검증합니다. 다운로드 진행 화면, 생성 호출 중 즉시 취소,
+결과 보고서 열기와 완료 알림은 이어지는 구현 범위입니다.
+
 ## Document Job 관리
 
 GUI와 새 파이프라인이 공유할 SQLite Job 경계는 CLI에서 먼저 사용할 수 있습니다.
@@ -75,11 +98,13 @@ rag job create \
   --output integrated-technical-guide.md
 rag job list
 rag job status --job-id <job_id>
+rag job start --job-id <job_id>
 rag job events --job-id <job_id> --after-sequence 0
 rag job cancel --job-id <job_id>
 ```
 
-`job create`는 정의와 체크포인트 디렉터리를 만들 뿐 아직 모델 Worker를 시작하지 않습니다.
-`job run`과 PySide6 GUI는 Coordinator 실제 단계 연결 후 제공됩니다.
+`job create`는 정의와 체크포인트를 만들고 `job start`가 별도 로컬 Worker를 시작합니다.
+오프라인 모드에서는 선택한 Hugging Face commit이 로컬 캐시에 있어야 하며, 없으면
+네트워크를 시도하지 않고 작업을 안전하게 실패 처리합니다.
 
 상세 설계는 [문서 인덱스](docs/README.md)와 [구현 계획](IMPLEMENTATION_PLAN.md)을 기준으로 합니다.

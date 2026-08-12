@@ -17,11 +17,13 @@ class MlxTextGenerator:
         model_revision: str,
         maximum_context_tokens: int,
         reserved_tokens: int,
+        offline_mode: bool = False,
     ) -> None:
         self._model_id = model_id
         self._model_revision = model_revision
         self._maximum_context_tokens = maximum_context_tokens
         self._reserved_tokens = reserved_tokens
+        self._offline_mode = offline_mode
         self._model: Any | None = None
         self._tokenizer: Any | None = None
         self._load_lock = threading.Lock()
@@ -118,10 +120,26 @@ class MlxTextGenerator:
                 mlx_lm = importlib.import_module("mlx_lm")
             except ModuleNotFoundError as error:
                 raise revision_error("DEPENDENCY_MISSING", {"dependency": "mlx-lm"}) from error
-            self._model, self._tokenizer = mlx_lm.load(
-                self._model_id,
-                revision=self._model_revision,
-            )
+            if self._offline_mode:
+                try:
+                    huggingface_hub = importlib.import_module("huggingface_hub")
+                    local_path = huggingface_hub.snapshot_download(
+                        repo_id=self._model_id,
+                        revision=self._model_revision,
+                        local_files_only=True,
+                    )
+                except ModuleNotFoundError as error:
+                    raise revision_error(
+                        "DEPENDENCY_MISSING", {"dependency": "huggingface-hub"}
+                    ) from error
+                except Exception as error:
+                    raise revision_error("MODEL_NOT_CACHED") from error
+                self._model, self._tokenizer = mlx_lm.load(str(local_path))
+            else:
+                self._model, self._tokenizer = mlx_lm.load(
+                    self._model_id,
+                    revision=self._model_revision,
+                )
         return self._model, self._tokenizer
 
     @staticmethod

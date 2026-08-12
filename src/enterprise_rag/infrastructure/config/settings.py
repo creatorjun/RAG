@@ -35,6 +35,20 @@ class RuntimeSettings(_StrictModel):
     max_parallel_llm_jobs: int = Field(default=1, ge=1, le=1)
     parse_concurrency: int = Field(default=2, ge=1, le=16)
     network_concurrency: int = Field(default=2, ge=1, le=16)
+    worker_start_timeout_seconds: int = Field(default=30, ge=5, le=300)
+    worker_heartbeat_seconds: int = Field(default=5, ge=1, le=60)
+    worker_missed_heartbeats: int = Field(default=3, ge=2, le=12)
+    model_download_reserve_bytes: int = Field(
+        default=5 * 1024 * 1024 * 1024,
+        ge=1024 * 1024 * 1024,
+    )
+
+    @model_validator(mode="after")
+    def validate_worker_health_window(self) -> RuntimeSettings:
+        stale_window = self.worker_heartbeat_seconds * self.worker_missed_heartbeats
+        if stale_window >= self.worker_start_timeout_seconds:
+            raise ValueError("worker stale window must be shorter than start timeout")
+        return self
 
 
 class SourcesSettings(_StrictModel):

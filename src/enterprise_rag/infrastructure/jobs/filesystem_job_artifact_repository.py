@@ -73,6 +73,13 @@ class FilesystemJobArtifactRepository:
     async def read_text(self, job_id: str, relative_path: str) -> str:
         return await asyncio.to_thread(self._read_text, job_id, relative_path)
 
+    async def list_relative_paths(
+        self,
+        job_id: str,
+        prefix: str | None = None,
+    ) -> tuple[str, ...]:
+        return await asyncio.to_thread(self._list_relative_paths, job_id, prefix)
+
     def _initialize(
         self,
         job: DocumentJob,
@@ -104,6 +111,7 @@ class FilesystemJobArtifactRepository:
                     "instruction": definition.instruction,
                     "output_relative_path": definition.output_relative_path,
                     "pipeline_fingerprint": definition.pipeline_fingerprint,
+                    "execution_settings": self._execution_settings(definition),
                 },
             )
             try:
@@ -222,6 +230,42 @@ class FilesystemJobArtifactRepository:
         except (OSError, UnicodeDecodeError) as error:
             raise revision_error("IO_FAILURE", {"job_id": job_id}) from error
 
+    def _list_relative_paths(
+        self,
+        job_id: str,
+        prefix: str | None,
+    ) -> tuple[str, ...]:
+        job_root = self._job_root(job_id)
+        scan_root = job_root
+        if prefix is not None:
+            relative_prefix = PurePosixPath(prefix)
+            if (
+                not prefix
+                or relative_prefix.is_absolute()
+                or any(part in {"", ".", ".."} for part in relative_prefix.parts)
+            ):
+                raise revision_error("PATH_ESCAPE", {"relative_path": prefix})
+            scan_root = job_root.joinpath(*relative_prefix.parts)
+            if not scan_root.exists():
+                return ()
+            if is_link_or_reparse(scan_root):
+                raise revision_error("LINK_NOT_ALLOWED", {"relative_path": prefix})
+        try:
+            paths: list[str] = []
+            for path in scan_root.rglob("*"):
+                if is_link_or_reparse(path):
+                    raise revision_error(
+                        "LINK_NOT_ALLOWED",
+                        {"relative_path": path.relative_to(job_root).as_posix()},
+                    )
+                if path.is_file():
+                    paths.append(path.relative_to(job_root).as_posix())
+            return tuple(sorted(paths))
+        except ApplicationError:
+            raise
+        except OSError as error:
+            raise revision_error("IO_FAILURE", {"job_id": job_id}) from error
+
     def _job_root(self, job_id: str) -> Path:
         try:
             DocumentJob(job_id)
@@ -282,3 +326,21 @@ class FilesystemJobArtifactRepository:
         finally:
             if temporary.exists():
                 temporary.unlink()
+
+    @staticmethod
+    def _execution_settings(definition: CreateDocumentJobDto) -> dict[str, object] | None:
+        settings = definition.execution_settings
+        if settings is None:
+            return None
+        return {
+            "output_root": settings.output_root,
+            "model_id": settings.model_id,
+            "model_revision": settings.model_revision,
+            "context_tokens": settings.context_tokens,
+            "max_output_tokens": settings.max_output_tokens,
+            "additional_system_prompt": settings.additional_system_prompt,
+            "prompt_fingerprint": settings.prompt_fingerprint,
+            "max_task_attempts": settings.max_task_attempts,
+            "offline_mode": settings.offline_mode,
+            "notify_on_completion": settings.notify_on_completion,
+        }

@@ -24,6 +24,7 @@
 | [configuration.md](configuration.md) | 전체 개발자, 운영자 | 최초 | 설정 스키마, 우선순위, 유효성 검증, 파이프라인 지문 |
 | [folder-revision-workflow.md](folder-revision-workflow.md) | AI 워크플로 개발자, 운영자 | Milestone 1, 5 | before/after 폴더, run 수명 주기, 비교, 권한 경계 |
 | [orchestration-workflow.md](orchestration-workflow.md) | GUI·파이프라인 개발자 | Milestone 1, 5~7 | Job, Evidence, Claim, Coverage, Task, 진행 이벤트, GUI |
+| [desktop-gui.md](desktop-gui.md) | GUI·Application 개발자 | Milestone 6 | 실행/설정 탭, 모델·프롬프트 설정, 체크포인트 대시보드 |
 | [security.md](security.md) | 보안 담당자, 개발자 | 전체 | 신뢰 경계, ACL, 외부 반출, SSRF, 인젝션, 비밀정보, 감사 |
 | [operations.md](operations.md) | 운영자, SRE | Milestone 0, 6 | 설치, 벤치마크, 실행, 백업, 복구, 장애 대응, 업그레이드 |
 | [evaluation.md](evaluation.md) | QA, 도메인 전문가 | Milestone 0~6 | 골든 세트, 지표, 합격 기준, 성능·보안·회귀 평가 |
@@ -48,6 +49,7 @@
 | SQLite·FAISS | `data-model.md`, ADR-0003 | `evaluation.md` 일관성·복구 시험 |
 | Qwen 주장 추출과 합성 | `pipeline.md`, `contracts.md`, ADR-0002 | `evaluation.md` 근거·인용 평가 |
 | Job·Task 오케스트레이션과 GUI | `orchestration-workflow.md`, ADR-0006 | `evaluation.md` Job·Coverage·GUI 회귀 |
+| 데스크톱 화면·설정 계약 | `desktop-gui.md`, `configuration.md` | GUI ViewModel·설정 CAS·상태 복원 시험 |
 | 웹 검증 | `security.md`, `pipeline.md`, ADR-0004 | `evaluation.md` egress·인젝션 회귀 |
 | 사람 승인과 게시 | `data-model.md`, `pipeline.md` | `evaluation.md` 승인·출처 완전성 |
 | 36GB 메모리 운영 | `architecture.md`, `operations.md`, ADR-0002 | `evaluation.md` 성능·장시간 시험 |
