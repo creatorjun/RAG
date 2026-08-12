@@ -1,6 +1,18 @@
 <!-- README.md -->
 # Enterprise Document RAG
 
+## GUI 바로 실행
+
+프로젝트 루트에서 다음 명령을 실행하면 됩니다.
+
+```bash
+venv/bin/python main.py
+```
+
+Windows 가상환경에서는 `venv\Scripts\python.exe main.py`를 사용합니다. `main.py`는 현재
+작업 디렉터리와 editable 설치 여부에 관계없이 이 프로젝트의 `src`와 설정을 사용해 GUI를
+시작합니다.
+
 로컬 우선 사내 문서 처리 시스템입니다. 외부 원본 시스템의 자격정보를 AI에 전달하지 않고, `data/before`의 불변 입력과 `data/after/runs/<run_id>`의 실행별 수정본을 분리합니다.
 
 ## 개발 환경
