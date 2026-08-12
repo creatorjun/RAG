@@ -77,7 +77,7 @@ Application→Infrastructure/Presentation, Presentation→Bootstrap/Infrastructu
 | M1-30C | 완료 | 네 상태, hash, text diff, 원자 report | 대용량 binary 성능 시험 |
 | M1-40 | 부분 완료 | 설정·경로·web disabled doctor | 모델·DB·디스크·권한 진단 |
 | M1-43 | 완료 | prepare·compare·finalize CLI와 인수 테스트 | 운영 승인 UI 연동 |
-| M6-20 | 부분 완료 | 기존 `presentation` 내 PySide6 shell, `rag-gui`, headless import·종료 smoke | 단일 instance·macOS packaging |
+| M6-20 | 부분 완료 | 기존 `presentation` 내 PySide6 shell, 공통 시각 체계, 스크롤 기반 실행·설정 화면, `rag-gui`, headless import·종료 smoke | 단일 instance·macOS packaging |
 | M6-21 | 부분 완료 | 실행/설정 탭, 로컬/원격 HF 카탈로그, exact commit·cache·MLX/메모리 적합성, dry-run 디스크 검사, 다운로드 건수·바이트 진행/취소, snapshot 재검증, prompt 설정 CAS | 실측 benchmark 승인 |
 | M6-22 | 부분 완료 | GUI 시작/재개, 10단계 event, manifest~게시 run 무결성 체크포인트, PID·heartbeat 건강 상태 | 대규모 event paging |
 | M6-23 | 완료 | 최종 문서·품질 JSON·비교 Markdown·합성 JSON 경로와 해시 재검증, coverage·비교 건수 GUI, 안전한 파일 열기 | 없음 |
@@ -87,7 +87,7 @@ Application→Infrastructure/Presentation, Presentation→Bootstrap/Infrastructu
 
 | 검사 | 결과 |
 | --- | --- |
-| pytest | 198 passed, 107 subtests passed |
+| pytest | 206 passed, 111 subtests passed |
 | branch coverage | 85.33%, 기준 85% 통과 |
 | 프로젝트 스킬 unittest | 4 passed |
 | Ruff | 통과 |

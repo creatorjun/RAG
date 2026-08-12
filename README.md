@@ -95,6 +95,8 @@ Hugging Face 최신 MLX 모델 검색, 고정 commit revision, 모델 크기·�
 검증된 체크포인트와 Worker PID·heartbeat·건강 상태를 표시합니다. 게시가 끝나면 최종 문서,
 품질 JSON, 비교 Markdown과 합성 보고서를 검증된 절대 경로로 열 수 있고 Task·Claim·Evidence
 coverage와 추가·수정·삭제·동일 건수를 함께 확인할 수 있습니다.
+주요 작업과 상태, 결과·품질, 실행 상세를 정보 중요도 순으로 분리했으며 작은 화면에서는
+카드 내용을 압축하지 않고 수직 스크롤로 확인합니다.
 
 Job을 생성한 뒤 `파이프라인 시작/재개`를 누르면 GUI와 분리된 로컬 실행 프로세스가
 고정 10단계를 수행합니다. 프로세스 소유권은 Job별 파일 lock과 runner token으로 보호하고,
