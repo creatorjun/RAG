@@ -77,6 +77,9 @@ from enterprise_rag.domain.jobs import DocumentJobState
 
 _PUBLISH_RESULT = "control/publish-result.json"
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_CLAIM_DRAFT_OUTPUT_CAP = 2_048
+_CLAIM_RELATION_OUTPUT_CAP = 2_048
+_TASK_PLAN_OUTPUT_CAP = 4_096
 ModelFactory = Callable[[StoredDocumentJobDefinitionDto], TextGeneratorPort]
 ClaimDraftGeneratorFactory = Callable[
     [TextGeneratorPort, int, str], ClaimDraftGeneratorPort
@@ -220,18 +223,27 @@ class LocalDocumentJobStages:
             ),
             extract_claims=ExtractClaimDrafts(
                 self._claim_draft_generator_factory(
-                    generator, output_budget, additional
+                    generator,
+                    min(output_budget, _CLAIM_DRAFT_OUTPUT_CAP),
+                    additional,
                 )
             ),
             build_claims=BuildReviewedClaimLedger(
+                # Claim drafts already reflect the user's extraction scope. Repeating
+                # the final-document formatting prompt here only consumes relation
+                # context and cannot change the fixed relation JSON contract.
                 self._claim_relation_generator_factory(
-                    generator, output_budget, additional
+                    generator,
+                    min(output_budget, _CLAIM_RELATION_OUTPUT_CAP),
+                    "",
                 ),
                 BuildClaimLedger(),
             ),
             plan_tasks=PlanDocumentTasks(
                 self._task_definition_generator_factory(
-                    generator, output_budget, additional
+                    generator,
+                    min(output_budget, _TASK_PLAN_OUTPUT_CAP),
+                    additional,
                 ),
                 BuildTaskPlan(),
             ),

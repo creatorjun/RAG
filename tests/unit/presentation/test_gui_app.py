@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from enterprise_rag.domain.errors import revision_error
+from enterprise_rag.domain.errors import ApplicationError, ErrorCategory, revision_error
 from enterprise_rag.presentation.gui.app import _error_notice, _job_form_error
 
 
@@ -54,6 +54,33 @@ class ErrorNoticeTest(unittest.TestCase):
         self.assertNotIn("secret detail", message)
         self.assertTrue(guidance)
         self.assertEqual(code, "UNEXPECTED_ERROR")
+
+    def test_unknown_application_code_uses_category_specific_guidance(self) -> None:
+        error = ApplicationError(
+            "CUSTOM_CONSISTENCY_ERROR",
+            ErrorCategory.CONSISTENCY,
+            False,
+            "상태가 일치하지 않습니다.",
+        )
+
+        _, guidance, code = _error_notice(error)
+
+        self.assertIn("상태를 새로고침", guidance)
+        self.assertNotIn("입력과 설정을 확인", guidance)
+        self.assertEqual(code, "CUSTOM_CONSISTENCY_ERROR")
+
+    def test_running_job_error_has_specific_recovery_guidance(self) -> None:
+        _, guidance, code = _error_notice(revision_error("JOB_ALREADY_RUNNING"))
+
+        self.assertIn("이미 실행 중인 Worker", guidance)
+        self.assertEqual(code, "JOB_ALREADY_RUNNING")
+
+    def test_token_budget_error_explains_recovery_options(self) -> None:
+        _, guidance, code = _error_notice(revision_error("TOKEN_BUDGET_EXCEEDED"))
+
+        self.assertIn("실패 지점부터 복구", guidance)
+        self.assertIn("context", guidance)
+        self.assertEqual(code, "TOKEN_BUDGET_EXCEEDED")
 
 
 if __name__ == "__main__":

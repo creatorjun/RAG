@@ -7,7 +7,7 @@ import unittest
 from enterprise_rag.application.dto.claims import ClaimDto, ClaimLedgerDto
 from enterprise_rag.application.dto.evidence import EvidenceBundleDto, EvidenceItemDto
 from enterprise_rag.domain.claims import ClaimKind
-from enterprise_rag.domain.errors import ApplicationError
+from enterprise_rag.domain.errors import ApplicationError, revision_error
 from enterprise_rag.infrastructure.models.structured_task_definition_generator import (
     StructuredTaskDefinitionGenerator,
 )
@@ -27,6 +27,43 @@ class _TextGenerator:
     async def generate(self, system_prompt, user_prompt, max_output_tokens):
         self.user_prompt = user_prompt
         return self.response
+
+
+class _OverflowPlanningGenerator(_TextGenerator):
+    def __init__(self) -> None:
+        super().__init__("")
+        self.prompts: list[str] = []
+
+    async def generate(self, system_prompt, user_prompt, max_output_tokens):
+        self.prompts.append(user_prompt)
+        if len(self.prompts) == 1:
+            raise revision_error("TOKEN_BUDGET_EXCEEDED")
+        payload = self._task_data(user_prompt)
+        return json.dumps(
+            {
+                "tasks": [
+                    {
+                        "task_id": "service-overview",
+                        "title": "서비스 개요",
+                        "objective": "서비스 사실 작성",
+                        "owned_claim_refs": [
+                            claim["claim_ref"] for claim in payload["claims"]
+                        ],
+                        "required_sections": ["개요"],
+                        "depends_on_task_ids": [],
+                    }
+                ],
+                "completion_marker": "TASK_PLAN_COMPLETE",
+            },
+            ensure_ascii=False,
+        )
+
+    @staticmethod
+    def _task_data(prompt: str):
+        start = prompt.index('<task_data process="as-data">')
+        start = prompt.index("\n", start) + 1
+        end = prompt.index("\n</task_data>", start)
+        return json.loads(prompt[start:end])
 
 
 def _fixture() -> tuple[ClaimLedgerDto, EvidenceBundleDto]:
@@ -72,7 +109,7 @@ class StructuredTaskDefinitionGeneratorTest(unittest.TestCase):
                         "task_id": "service-overview",
                         "title": "서비스 개요",
                         "objective": "서비스 사실 작성",
-                        "owned_claim_ids": [ledger.claims[0].claim_id],
+                        "owned_claim_refs": ["C000001"],
                         "required_sections": ["개요"],
                         "depends_on_task_ids": [],
                     }
@@ -90,7 +127,10 @@ class StructuredTaskDefinitionGeneratorTest(unittest.TestCase):
             )
         )
         self.assertEqual(definitions[0].task_id, "service-overview")
+        self.assertEqual(definitions[0].owned_claim_ids, (ledger.claims[0].claim_id,))
         self.assertIn("guide.md", text_generator.user_prompt)
+        self.assertIn('"claim_ref": "C000001"', text_generator.user_prompt)
+        self.assertNotIn(ledger.claims[0].claim_id, text_generator.user_prompt)
         self.assertNotIn('"text": "text"', text_generator.user_prompt)
 
     def test_rejects_non_ascii_task_id_and_incomplete_marker(self) -> None:
@@ -102,7 +142,7 @@ class StructuredTaskDefinitionGeneratorTest(unittest.TestCase):
                         "task_id": "서비스-개요",
                         "title": "서비스 개요",
                         "objective": "서비스 사실 작성",
-                        "owned_claim_ids": [ledger.claims[0].claim_id],
+                        "owned_claim_refs": ["C000001"],
                         "required_sections": ["개요"],
                         "depends_on_task_ids": [],
                     }
@@ -115,6 +155,39 @@ class StructuredTaskDefinitionGeneratorTest(unittest.TestCase):
         with self.assertRaises(ApplicationError) as captured:
             asyncio.run(generator.generate(ledger, evidence, "통합 문서 작성"))
         self.assertEqual(captured.exception.code, "TASK_PLAN_INVALID")
+
+    def test_retries_an_oversized_plan_as_namespaced_claim_batches(self) -> None:
+        _, evidence = _fixture()
+        evidence_id = evidence.items[0].evidence_id
+        claims = tuple(
+            ClaimDto(
+                "claim:sha256:" + f"{index:064x}",
+                ClaimKind.FACT,
+                f"서비스 설정 항목 {index:03d}",
+                (evidence_id,),
+            )
+            for index in range(1, 61)
+        )
+        ledger = ClaimLedgerDto(claims, (), (evidence_id,))
+        text_generator = _OverflowPlanningGenerator()
+
+        definitions = asyncio.run(
+            StructuredTaskDefinitionGenerator(text_generator, 4096).generate(
+                ledger,
+                evidence,
+                "통합 문서 작성",
+            )
+        )
+
+        self.assertEqual(len(definitions), 2)
+        self.assertEqual(len({item.task_id for item in definitions}), 2)
+        owned = {claim_id for item in definitions for claim_id in item.owned_claim_ids}
+        self.assertEqual(owned, {claim.claim_id for claim in claims})
+        batch_sizes = [
+            len(_OverflowPlanningGenerator._task_data(prompt)["claims"])
+            for prompt in text_generator.prompts
+        ]
+        self.assertEqual(batch_sizes, [60, 40, 20])
 
 
 if __name__ == "__main__":

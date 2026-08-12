@@ -67,7 +67,7 @@ Application→Infrastructure/Presentation, Presentation→Bootstrap/Infrastructu
 | M1-24 | 완료 | 고정 10단계 실제 어댑터, Job별 subprocess, event 기반 멱등 재개, SIGTERM·토큰 경계 즉시 취소·15초 watchdog 강제 종료 | 없음 |
 | M5-02 | 부분 완료 | text chunk Evidence DTO, 결정 ID, 100% 배정 검사, 전용 파일 저장소 | parser 구조 요소·ACL Evidence |
 | M5-03 | 완료 | Evidence 제한 Claim 추출, 결정 ID, 동일 내용·다중 Evidence 병합, Ledger 저장소 | 없음 |
-| M5-04 | 부분 완료 | 구조화 관계 판정, known-pair·중복 pair 검증, conflict 전달 | 대규모 Claim 후보 축소·평가 보정 |
+| M5-04 | 부분 완료 | 구조화 관계 판정, compact Claim ref, context 초과 시 원본·전체 유사 순서·종류별 40-Claim 겹침 batch, known-pair·중복·상충 pair 검증, conflict 전달 | 대규모 평가 기반 후보 recall 보정 |
 | M5-05 | 완료 | Claim 단일 소유, Evidence 100% Coverage, 순환 없는 고정 Task DAG | 없음 |
 | M5-06 | 완료 | TaskPacket·TaskOutput strict 계약과 write-once attempt 저장 | 없음 |
 | M5-07 | 부분 완료 | JSON 전용 MLX stream, 토큰 경계 취소, Job별 별도 프로세스·heartbeat·유예 후 자기 process group 종료, 실패 Task만 최대 3회, write-once attempt 복구 | Metal 압력 감시 |
@@ -77,7 +77,7 @@ Application→Infrastructure/Presentation, Presentation→Bootstrap/Infrastructu
 | M1-30C | 완료 | 네 상태, hash, text diff, 원자 report | 대용량 binary 성능 시험 |
 | M1-40 | 부분 완료 | 설정·경로·web disabled doctor | 모델·DB·디스크·권한 진단 |
 | M1-43 | 완료 | prepare·compare·finalize CLI와 인수 테스트 | 운영 승인 UI 연동 |
-| M6-20 | 부분 완료 | 기존 `presentation` 내 PySide6 shell, 공통 시각 체계, 스크롤 기반 실행·설정 화면, `rag-gui`, headless import·종료 smoke | 단일 instance·macOS packaging |
+| M6-20 | 부분 완료 | 기존 `presentation` 내 PySide6 shell, 공통 시각 체계, macOS 독립 application palette, 스크롤 기반 실행·설정 화면, `rag-gui`, headless import·종료 smoke | 단일 instance·macOS packaging |
 | M6-21 | 부분 완료 | 실행/설정 탭, 로컬/원격 HF 카탈로그, exact commit·cache·MLX/메모리 적합성, dry-run 디스크 검사, 다운로드 건수·바이트 진행/취소, snapshot 재검증, prompt 설정 CAS | 실측 benchmark 승인 |
 | M6-22 | 부분 완료 | GUI 시작/재개, 10단계 event, manifest~게시 run 무결성 체크포인트, PID·heartbeat 건강 상태 | 대규모 event paging |
 | M6-23 | 완료 | 최종 문서·품질 JSON·비교 Markdown·합성 JSON 경로와 해시 재검증, coverage·비교 건수 GUI, 안전한 파일 열기 | 없음 |
@@ -87,14 +87,14 @@ Application→Infrastructure/Presentation, Presentation→Bootstrap/Infrastructu
 
 | 검사 | 결과 |
 | --- | --- |
-| pytest | 222 passed, 135 subtests passed |
-| branch coverage | 85.33%, 기준 85% 통과 |
+| pytest | 227 passed, 135 subtests passed |
+| branch coverage | 85.16%, 기준 85% 통과 |
 | 프로젝트 스킬 unittest | 4 passed |
 | Ruff | 통과 |
 | mypy strict | 148 source files 통과 |
 | 아키텍처 import 경계 | Domain/Application/Infrastructure/Presentation 위반 0건, Job stage 구체 어댑터 import 0건 |
 | editable package 설치 | 성공, `rag` 콘솔 스크립트 생성 |
-| PySide6 GUI smoke | offscreen 2탭·모델 카탈로그·다운로드 진행·Worker 취소·결과 품질·알림 상태 생성과 정상 종료, `rag-gui --help` 성공 |
+| PySide6 GUI smoke | offscreen 2탭·macOS 고정 palette·오류 대비·중복 실행 차단·모델 카탈로그·다운로드 진행·Worker 취소·결과 품질·알림 상태 생성과 정상 종료, `rag-gui --help` 성공 |
 | `rag doctor` | development 설정에서 성공, web disabled 확인 |
 | Oracle Linux 9.8 CLI smoke | 입력 9개, added 1, modified 1, removed 1, unchanged 7, finalize 성공 |
 
@@ -124,6 +124,11 @@ Application→Infrastructure/Presentation, Presentation→Bootstrap/Infrastructu
 - 표현과 운영 세부가 동일한 Claim은 원본이 달라도 하나로 병합하고 모든 Evidence를 유지한다.
 - 관계 판정기는 의미 있는 관계만 제안하고 코드는 알 수 없는 Claim, 중복 pair, `UNRELATED`
   출력을 거부한다.
+- Claim 추출·관계·Task 계획은 최종 문서 출력 상한을 그대로 예약하지 않고 각각 2,048·2,048·
+  4,096 토큰 상한을 사용한다. 관계와 계획 입력의 긴 ID는 요청 범위 compact ref로 치환한다.
+- 전체 관계·계획 요청이 context를 넘을 때만 최대 40개 Claim batch로 재시도한다. 관계 batch는
+  원본·문장 순서·종류별 후보를 겹쳐 구성하고, 계획 batch는 고유 namespace와 전체 Claim 단일
+  소유 검증을 적용한다.
 - Task planner의 제안 뒤 Claim 단일 소유, Evidence 100%, 의존성 존재와 DAG 무순환을 코드로
   다시 검증한다.
 - 각 Task attempt는 구조화 JSON 원본과 검증 보고서를 별도 write-once 파일로 보존한다.

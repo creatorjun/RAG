@@ -429,6 +429,10 @@ class LanguageModelPort(Protocol):
 
 `input_token_count + max_output_tokens + reserved_tokens`가 승인 컨텍스트를 넘으면 모델을 호출하지 않고 `TokenBudgetExceededError`를 반환한다. `reserved_tokens` 기본값은 512다.
 
+구조화 Claim 관계 판정과 Task 계획 adapter는 이 오류를 받으면 원문이나 Claim을 자르지 않고
+검증 가능한 최대 40개 Claim batch로 재요청한다. 요청 내부의 SHA-256 Claim 식별자는 짧은
+임시 참조로 치환하고 응답 직후 원래 식별자로 복원한 다음 coverage와 관계 무결성을 검사한다.
+
 ## 7. Web Search 계약
 
 ```python

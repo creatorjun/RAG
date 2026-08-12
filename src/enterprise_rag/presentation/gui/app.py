@@ -28,7 +28,7 @@ from enterprise_rag.application.dto.model_download import (
 )
 from enterprise_rag.application.dto.runner import RunnerHealth
 from enterprise_rag.application.runtime import JobApplication
-from enterprise_rag.domain.errors import ApplicationError
+from enterprise_rag.domain.errors import ApplicationError, ErrorCategory
 from enterprise_rag.domain.jobs import DocumentJobState
 from enterprise_rag.presentation.gui.view_model import DesktopViewModel
 
@@ -61,6 +61,67 @@ _ERROR_GUIDANCE = {
     "CLAIM_LEDGER_INVALID": (
         "저장된 Evidence는 유지됩니다. 문제를 수정한 뒤 `실패 지점부터 복구`를 누르세요."
     ),
+    "JOB_ALREADY_RUNNING": (
+        "이미 실행 중인 Worker가 있습니다. 실행 탭에서 현재 단계와 heartbeat를 확인하세요."
+    ),
+    "JOB_NOT_RUNNABLE": (
+        "현재 Job 상태를 새로고침하세요. 실패한 Job은 `실패 지점부터 복구`로 "
+        "다시 시작할 수 있습니다."
+    ),
+    "JOB_STATE_CONFLICT": (
+        "다른 Worker가 상태를 변경했습니다. 상태를 새로고침한 뒤 표시된 동작만 실행하세요."
+    ),
+    "JOB_LAUNCH_FAILED": (
+        "Worker를 시작하지 못했습니다. 프로그램을 다시 시작한 뒤 실패 Job을 복구하세요."
+    ),
+    "INPUT_HASH_CHANGED": (
+        "Job 생성 후 원본이 변경됐습니다. 변경을 완료한 뒤 새 작업을 생성하세요."
+    ),
+    "MODEL_CATALOG_UNAVAILABLE": (
+        "네트워크 연결을 확인하거나 오프라인 모드에서 로컬 캐시 모델을 선택하세요."
+    ),
+    "MODEL_SNAPSHOT_INVALID": (
+        "설정 탭에서 해당 모델을 다시 다운로드하고 검증을 완료하세요."
+    ),
+    "MODEL_GENERATION_FAILED": (
+        "Worker 상태와 메모리 여유를 확인한 뒤 실패 지점부터 복구하세요."
+    ),
+    "MODEL_OUTPUT_INCOMPLETE": (
+        "출력 토큰 한도를 확인한 뒤 실패 지점부터 복구하세요."
+    ),
+    "TOKEN_BUDGET_EXCEEDED": (
+        "단계별 입력 분할 한도를 초과했습니다. 업데이트된 파이프라인으로 실패 지점부터 "
+        "복구하세요. 반복되면 설정 탭에서 context를 늘리거나 추가 시스템 지침을 줄이세요."
+    ),
+    "TASK_PLAN_INVALID": (
+        "저장된 Evidence와 Claim은 유지됩니다. 실패 지점부터 복구해 계획을 다시 생성하세요."
+    ),
+    "TASK_OUTPUT_INVALID": (
+        "해당 Task 출력이 자동 교정 한도를 넘었습니다. 실패 지점부터 복구하세요."
+    ),
+    "IO_FAILURE": (
+        "작업 폴더의 쓰기 권한과 디스크 여유 공간을 확인한 뒤 다시 시도하세요."
+    ),
+}
+
+_CATEGORY_GUIDANCE = {
+    ErrorCategory.TRANSIENT_SOURCE: "원본 파일 변경을 마친 뒤 새 작업을 생성하세요.",
+    ErrorCategory.TRANSIENT_NETWORK: "네트워크 연결을 확인한 뒤 요청을 다시 실행하세요.",
+    ErrorCategory.RESOURCE_PRESSURE: "디스크와 메모리 여유 공간을 확보한 뒤 다시 시도하세요.",
+    ErrorCategory.INVALID_INPUT: "오류와 관련된 입력 항목을 수정한 뒤 다시 시도하세요.",
+    ErrorCategory.UNSUPPORTED_FORMAT: "지원되는 UTF-8 텍스트 형식으로 변환한 뒤 다시 시도하세요.",
+    ErrorCategory.DATA_CORRUPTION: "손상된 체크포인트나 모델을 다시 생성·다운로드하세요.",
+    ErrorCategory.SECURITY_BLOCK: "허용된 작업 폴더와 링크·권한 정책을 확인하세요.",
+    ErrorCategory.MODEL_OUTPUT: "출력 한도와 Worker 상태를 확인한 뒤 실패 지점부터 복구하세요.",
+    ErrorCategory.CONSISTENCY: "상태를 새로고침하고 저장된 체크포인트부터 복구하세요.",
+    ErrorCategory.CANCELLED: "취소가 완료됐습니다. 필요하면 새 작업을 생성하세요.",
+    ErrorCategory.INTERNAL: "프로그램을 다시 시작하고 작업 폴더 권한을 확인하세요.",
+}
+
+_FEEDBACK_COLORS = {
+    "info": ("#EEF3FF", "#2949B6", "#D9E2FF"),
+    "success": ("#EAF8F0", "#137A46", "#CDEEDB"),
+    "danger": ("#FFF1F2", "#A8202A", "#F5CED1"),
 }
 
 
@@ -99,7 +160,7 @@ def _error_notice(error: Exception) -> tuple[str, str, str]:
     if isinstance(error, ApplicationError):
         guidance = _ERROR_GUIDANCE.get(
             error.code,
-            "입력과 설정을 확인한 뒤 다시 시도하세요. 문제가 계속되면 오류 코드를 확인하세요.",
+            _CATEGORY_GUIDANCE[error.category],
         )
         return error.safe_message, guidance, error.code
     if isinstance(error, ValueError):
@@ -263,7 +324,8 @@ QPushButton[role="ghost"]:disabled {
     color: #A7B0BF;
     border-color: #E5E9F0;
 }
-QTabWidget::pane { border: none; background: transparent; top: -1px; }
+QTabWidget, QTabBar { background: #F4F7FB; color: #344054; }
+QTabWidget::pane { border: none; background: #F4F7FB; top: -1px; }
 QTabWidget#mainTabs, QTabWidget#mainTabs::pane,
 QTabBar#mainTabBar {
     background: #F4F7FB;
@@ -396,8 +458,26 @@ class _DesktopWindow:
         style.polish(widget)
 
     def _show_feedback(self, widget: Any, message: str, tone: str) -> None:
+        background, foreground, border = _FEEDBACK_COLORS[tone]
         widget.setText(message)
         self._set_tone(widget, tone)
+        widget.setStyleSheet(
+            "QLabel {"
+            f"background-color: {background}; color: {foreground}; "
+            f"border: 1px solid {border}; border-radius: 9px; "
+            "padding: 10px 12px; font-weight: 600;"
+            "}"
+        )
+        palette = widget.palette()
+        palette.setColor(self._gui.QPalette.ColorRole.Window, self._gui.QColor(background))
+        palette.setColor(
+            self._gui.QPalette.ColorRole.WindowText,
+            self._gui.QColor(foreground),
+        )
+        palette.setColor(self._gui.QPalette.ColorRole.Text, self._gui.QColor(foreground))
+        widget.setPalette(palette)
+        widget.setAutoFillBackground(True)
+        widget.setAttribute(self._core.Qt.WidgetAttribute.WA_StyledBackground, True)
         widget.setVisible(True)
         widget.updateGeometry()
         if widget is getattr(self, "_job_feedback", None):
@@ -408,6 +488,42 @@ class _DesktopWindow:
         widget.setVisible(False)
         if widget is getattr(self, "_job_feedback", None):
             self._execution_top_splitter.setMinimumHeight(318)
+
+    def _style_tab_surface(self, tabs: Any, background: str, name: str) -> None:
+        tabs.setObjectName(name)
+        bar = tabs.tabBar()
+        bar.setObjectName(f"{name.removesuffix('s')}Bar")
+        color = self._gui.QColor(background)
+        for widget in (tabs, bar):
+            palette = widget.palette()
+            palette.setColor(self._gui.QPalette.ColorRole.Window, color)
+            palette.setColor(
+                self._gui.QPalette.ColorRole.WindowText,
+                self._gui.QColor("#344054"),
+            )
+            palette.setColor(self._gui.QPalette.ColorRole.Button, color)
+            palette.setColor(
+                self._gui.QPalette.ColorRole.ButtonText,
+                self._gui.QColor("#344054"),
+            )
+            widget.setPalette(palette)
+            widget.setAutoFillBackground(True)
+            widget.setAttribute(
+                self._core.Qt.WidgetAttribute.WA_StyledBackground,
+                True,
+            )
+        tabs.setStyleSheet(
+            f"QTabWidget {{ background: {background}; color: #344054; "
+            "border: none; } "
+            f"QTabWidget::pane {{ background: {background}; border: none; }} "
+            f"QTabBar {{ background: {background}; color: #344054; border: none; }} "
+            "QTabBar::tab { background: transparent; color: #667085; border: none; "
+            "padding: 10px 18px; margin-right: 4px; font-weight: 600; } "
+            "QTabBar::tab:selected { background: #FFFFFF; color: #304CC2; "
+            "border: 1px solid #DFE5ED; border-radius: 9px; } "
+            "QTabBar::tab:hover:!selected { color: #344054; background: #EAEEF5; "
+            "border-radius: 9px; }"
+        )
 
     def _label(self, text: str, role: str, word_wrap: bool = False) -> Any:
         label = self._widgets.QLabel(text)
@@ -501,8 +617,7 @@ class _DesktopWindow:
         root.addWidget(self._app_feedback)
 
         self._main_tabs = self._widgets.QTabWidget()
-        self._main_tabs.setObjectName("mainTabs")
-        self._main_tabs.tabBar().setObjectName("mainTabBar")
+        self._style_tab_surface(self._main_tabs, "#F4F7FB", "mainTabs")
         self._main_tabs.setDocumentMode(True)
         self._main_tabs.addTab(self._execution_tab(), "실행")
         self._main_tabs.addTab(self._settings_tab(), "설정")
@@ -966,8 +1081,7 @@ class _DesktopWindow:
         )
         detail_card.setMinimumHeight(360)
         detail_tabs = self._widgets.QTabWidget()
-        detail_tabs.setObjectName("detailTabs")
-        detail_tabs.tabBar().setObjectName("detailTabBar")
+        self._style_tab_surface(detail_tabs, "#FFFFFF", "detailTabs")
         detail_tabs.setDocumentMode(True)
         checkpoint_page = self._widgets.QWidget()
         checkpoint_layout = self._widgets.QVBoxLayout(checkpoint_page)
@@ -1536,6 +1650,9 @@ class _DesktopWindow:
     def _start_job(self) -> None:
         if self._active_job_id is None:
             return
+        previous_text = self._start_button.text()
+        self._start_button.setText("파이프라인 시작 중")
+        self._start_button.setEnabled(False)
         try:
             process_id = self._view_model.start_job(self._active_job_id)
             self._last_message.setText(
@@ -1543,7 +1660,14 @@ class _DesktopWindow:
             )
             self._timer.start()
         except Exception as error:
+            if isinstance(error, ApplicationError) and error.code == "JOB_ALREADY_RUNNING":
+                self._start_button.setText("파이프라인 실행 중")
+            else:
+                self._start_button.setText(previous_text)
+                self._start_button.setEnabled(True)
             self._show_error(error)
+        else:
+            self._refresh_dashboard()
 
     def _refresh_dashboard(self) -> None:
         if self._active_job_id is None:
@@ -1663,6 +1787,10 @@ class _DesktopWindow:
 
     def _render_dashboard(self, dashboard: JobDashboardDto) -> None:
         job = dashboard.job
+        runner_busy = dashboard.runner is not None and dashboard.runner.health in {
+            RunnerHealth.STARTING,
+            RunnerHealth.HEALTHY,
+        }
         tone = self._job_tone(job.state)
         self._header_job.setText(f"활성 Job: {job.job_id}")
         self._header_state.setText(job.state.value)
@@ -1671,18 +1799,26 @@ class _DesktopWindow:
         self._set_tone(self._state, tone)
         self._progress.setValue(job.last_percentage)
         self._progress_value.setText(f"{job.last_percentage}%")
-        if job.state is DocumentJobState.FAILED:
+        if runner_busy:
+            self._start_button.setText("파이프라인 실행 중")
+        elif job.state is DocumentJobState.FAILED:
             self._start_button.setText("실패 지점부터 복구")
         else:
             self._start_button.setText(
                 "파이프라인 재개" if job.last_percentage else "파이프라인 시작"
             )
         self._start_button.setEnabled(
-            job.state is DocumentJobState.FAILED
-            or (
-                not job.state.terminal
-                and job.state
-                not in {DocumentJobState.CANCELLING, DocumentJobState.NEEDS_ATTENTION}
+            not runner_busy
+            and (
+                job.state is DocumentJobState.FAILED
+                or (
+                    not job.state.terminal
+                    and job.state
+                    not in {
+                        DocumentJobState.CANCELLING,
+                        DocumentJobState.NEEDS_ATTENTION,
+                    }
+                )
             )
         )
         self._cancel_job_button.setEnabled(
@@ -1832,6 +1968,28 @@ class _DesktopWindow:
         dialog.setInformativeText(guidance)
         dialog.setDetailedText(f"오류 코드: {code}")
         dialog.setStandardButtons(self._widgets.QMessageBox.StandardButton.Ok)
+        dialog.setStyleSheet(
+            "QMessageBox { background-color: #FFFFFF; color: #172033; }"
+            "QMessageBox QLabel { background-color: transparent; color: #172033; }"
+            "QMessageBox QTextEdit { background-color: #F7F9FC; color: #344054; "
+            "border: 1px solid #D7DEE8; border-radius: 8px; }"
+            "QMessageBox QPushButton { background-color: #3B5BDB; color: #FFFFFF; "
+            "border: 1px solid #3B5BDB; border-radius: 8px; padding: 7px 18px; }"
+        )
+        palette = dialog.palette()
+        palette.setColor(
+            self._gui.QPalette.ColorRole.Window,
+            self._gui.QColor("#FFFFFF"),
+        )
+        palette.setColor(
+            self._gui.QPalette.ColorRole.WindowText,
+            self._gui.QColor("#172033"),
+        )
+        palette.setColor(
+            self._gui.QPalette.ColorRole.Text,
+            self._gui.QColor("#172033"),
+        )
+        dialog.setPalette(palette)
         dialog.exec()
 
     def close(self) -> None:
@@ -1844,6 +2002,44 @@ class _DesktopWindow:
         for future in tuple(self._futures):
             future.cancel()
         self._executor.shutdown(wait=False, cancel_futures=True)
+
+
+def _configure_qt_theme(qt_gui: Any, qt_widgets: Any, application: Any) -> None:
+    application.setStyle("Fusion")
+    palette = qt_gui.QPalette()
+    colors = {
+        qt_gui.QPalette.ColorRole.Window: "#F4F7FB",
+        qt_gui.QPalette.ColorRole.WindowText: "#172033",
+        qt_gui.QPalette.ColorRole.Base: "#FFFFFF",
+        qt_gui.QPalette.ColorRole.AlternateBase: "#F8FAFC",
+        qt_gui.QPalette.ColorRole.ToolTipBase: "#111827",
+        qt_gui.QPalette.ColorRole.ToolTipText: "#FFFFFF",
+        qt_gui.QPalette.ColorRole.Text: "#172033",
+        qt_gui.QPalette.ColorRole.Button: "#FFFFFF",
+        qt_gui.QPalette.ColorRole.ButtonText: "#344054",
+        qt_gui.QPalette.ColorRole.Highlight: "#3B5BDB",
+        qt_gui.QPalette.ColorRole.HighlightedText: "#FFFFFF",
+        qt_gui.QPalette.ColorRole.PlaceholderText: "#98A2B3",
+    }
+    for role, value in colors.items():
+        palette.setColor(role, qt_gui.QColor(value))
+    palette.setColor(
+        qt_gui.QPalette.ColorGroup.Disabled,
+        qt_gui.QPalette.ColorRole.Text,
+        qt_gui.QColor("#A7B0BF"),
+    )
+    palette.setColor(
+        qt_gui.QPalette.ColorGroup.Disabled,
+        qt_gui.QPalette.ColorRole.ButtonText,
+        qt_gui.QColor("#A7B0BF"),
+    )
+    palette.setColor(
+        qt_gui.QPalette.ColorGroup.Disabled,
+        qt_gui.QPalette.ColorRole.WindowText,
+        qt_gui.QColor("#A7B0BF"),
+    )
+    application.setPalette(palette)
+    qt_widgets.QToolTip.setPalette(palette)
 
 
 def main(
@@ -1868,6 +2064,7 @@ def main(
         print(f"{error.safe_message} ({error.code})", file=sys.stderr)
         return 2
     qt_application = qt_widgets.QApplication(sys.argv[:1])
+    _configure_qt_theme(qt_gui, qt_widgets, qt_application)
     view_model = DesktopViewModel(application)
     desktop = _DesktopWindow(qt_core, qt_gui, qt_widgets, view_model)
     qt_application.aboutToQuit.connect(desktop.close)

@@ -40,6 +40,11 @@ GUI와 별도 프로세스이며 GUI 종료가 Job 취소를 뜻하지 않는다
   대응한다.
 - 필수 입력은 작업 시작 전에 필드 단위로 검증한다. 오류는 해당 입력에 포커스를 옮기고 카드 안에
   원인과 해결 방법을 표시하며, 백그라운드 오류는 상단 배너와 오류 코드가 포함된 상세 창에 남긴다.
+- macOS의 시스템 다크 모드와 native style이 애플리케이션 색을 덮어쓰지 않도록 `Fusion` style과
+  명시적인 application palette를 사용한다. 실행·설정 탭, 세부 탭, 오류 배너와 오류 상세 창은
+  배경색과 전경색을 각각 고정해 대비를 유지한다.
+- 오류 안내는 포괄적인 재시도 문구 대신 오류 코드별 해결 절차를 우선하고, 등록되지 않은 코드도
+  입력·네트워크·자원·일관성 등 오류 category에 맞는 복구 절차를 표시한다.
 
 ## 3. 설정 탭
 
@@ -149,6 +154,16 @@ Claim 추출에서 기술적으로 관련된 내용이 없는 Evidence는 원본
 Claim, Task와 최종 문서 coverage에서는 제외한다. 기술 Claim이 있는 Evidence만 Claim Ledger의
 검토 완료 집합에 들어가며, 최종 품질 게이트는 이 집합의 100% coverage를 요구한다.
 
+GUI의 `최대 출력`은 최종 Task 문서 생성에 사용할 상한이다. Worker는 16K 같은 제한된
+context에서도 입력 공간을 확보하도록 Claim 추출 2,048, Claim 관계 2,048, Task 계획 4,096
+토큰을 단계별 상한으로 사용한다. Claim 관계와 Task 계획에 전달하는 긴 SHA-256 식별자는
+요청 안에서만 유효한 짧은 참조로 바꾸고, 응답 검증 직후 원래 식별자로 복원한다.
+
+전체 Claim 요청이 그래도 context를 넘으면 최대 40개 Claim 단위로 자동 분할한다. 관계 판정은
+원본 문서, 전체 문장 순서와 Claim 종류별 겹침 batch를 조합하고 중복되거나 서로 다른 판정이
+나온 관계를 코드로 검증한다. Task 계획은 Claim을 중복 없이 나누고 batch별 Task ID namespace를
+부여한 뒤 기존 단일 소유·Evidence coverage·DAG 품질 게이트를 그대로 적용한다.
+
 Worker 오류로 `FAILED`가 된 Job은 명시적인 `실패 지점부터 복구` 동작으로 `CREATED`에 재등록한
 뒤 저장된 체크포인트를 순서대로 재검증한다. 기존 진행 이벤트와 진행률은 유지하고, 유효한
 manifest·Evidence·Claim·Task 결과는 다시 생성하지 않는다.
@@ -226,6 +241,15 @@ Worker 생존 상태는 Job별 runner token·PID·launch sequence와 5초 heartb
 실행 탭은 `STARTING`, `HEALTHY`, `STALE`, `EXITED`, `FAILED`, 마지막 heartbeat 경과 시간과
 안전한 오류 코드를 표시한다. OS 파일 lock이 실제 중복 실행 권한의 기준이고,
 `runner-state.json`은 GUI 관측과 감사 전용이다.
+
+Runner가 `STARTING` 또는 `HEALTHY`이면 시작 버튼은 `파이프라인 실행 중`으로 바뀌고
+비활성화된다. 따라서 사용자가 같은 Job의 시작을 연속 요청해 `JOB_ALREADY_RUNNING`을 만드는
+경로를 UI에서 먼저 차단한다. 시작 요청을 전달하는 순간에도 즉시 버튼을 잠그고, 성공하면
+dashboard를 바로 다시 읽는다. 다른 창과의 경합으로 오류가 반환돼도 현재 단계와 heartbeat를
+확인하라는 구체적인 복구 안내를 제공한다.
+
+`TOKEN_BUDGET_EXCEEDED`는 업데이트된 단계별 분할로 `실패 지점부터 복구`하는 방법을 우선
+안내한다. 최소 batch도 수용하지 못할 때만 context 확대 또는 사용자 추가 지침 축소를 요청한다.
 
 `즉시 취소 요청`은 Job을 `CANCELLING`으로 바꾸고 검증된 Worker process group에 `SIGTERM`을
 전달한다. 화면에는 토큰 경계 중단, 정상 종료 유예 시간과 Worker 종료 확인 상태를 표시한다.

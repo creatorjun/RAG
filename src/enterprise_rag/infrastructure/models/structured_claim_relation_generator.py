@@ -25,6 +25,8 @@ _MEANINGFUL_RELATIONS = {
     ClaimRelationType.CONTEXTUAL_REPEAT,
     ClaimRelationType.CONFLICT,
 }
+_MAX_RELATION_BATCH_CLAIMS = 40
+_RELATION_BATCH_OVERLAP = 8
 
 
 class StructuredClaimRelationGenerator:
@@ -51,8 +53,52 @@ class StructuredClaimRelationGenerator:
         if len(drafts) < 2:
             return ()
         await self._generator.prepare()
-        prompt = self._prompt(drafts, evidence, instruction)
-        known_drafts = {draft.draft_id for draft in drafts}
+        try:
+            return await self._generate_once(drafts, evidence, instruction)
+        except ApplicationError as error:
+            if error.code != "TOKEN_BUDGET_EXCEEDED":
+                raise
+        relations: list[ClaimRelationDraftDto] = []
+        for batch in self._relation_batches(drafts, evidence):
+            relations.extend(await self._generate_bounded(batch, evidence, instruction))
+        return self._merge_relations(relations)
+
+    async def _generate_bounded(
+        self,
+        drafts: tuple[ClaimDraftDto, ...],
+        evidence: EvidenceBundleDto,
+        instruction: str,
+    ) -> tuple[ClaimRelationDraftDto, ...]:
+        if len(drafts) < 2:
+            return ()
+        try:
+            return await self._generate_once(drafts, evidence, instruction)
+        except ApplicationError as error:
+            if error.code != "TOKEN_BUDGET_EXCEEDED" or len(drafts) <= 2:
+                raise
+        midpoint = len(drafts) // 2
+        overlap = min(4, midpoint - 1, len(drafts) - midpoint - 1)
+        left = drafts[: midpoint + overlap]
+        right = drafts[midpoint - overlap :]
+        left_relations = await self._generate_bounded(left, evidence, instruction)
+        right_relations = await self._generate_bounded(right, evidence, instruction)
+        relations = [*left_relations, *right_relations]
+        return self._merge_relations(relations)
+
+    async def _generate_once(
+        self,
+        drafts: tuple[ClaimDraftDto, ...],
+        evidence: EvidenceBundleDto,
+        instruction: str,
+    ) -> tuple[ClaimRelationDraftDto, ...]:
+        reference_by_draft = {
+            draft.draft_id: f"C{index:06d}"
+            for index, draft in enumerate(drafts, start=1)
+        }
+        draft_by_reference = {
+            reference: draft_id for draft_id, reference in reference_by_draft.items()
+        }
+        prompt = self._prompt(drafts, evidence, instruction, reference_by_draft)
         last_error: Exception | None = None
         for attempt in range(1, 3):
             try:
@@ -61,7 +107,7 @@ class StructuredClaimRelationGenerator:
                     prompt,
                     self._max_output_tokens,
                 )
-                return self._parse(raw, known_drafts)
+                return self._parse(raw, draft_by_reference)
             except ApplicationError:
                 raise
             except (KeyError, TypeError, ValueError) as error:
@@ -70,11 +116,89 @@ class StructuredClaimRelationGenerator:
                     prompt += self._repair_instruction()
         raise revision_error("CLAIM_LEDGER_INVALID", {"attempts": 2}) from last_error
 
+    @classmethod
+    def _relation_batches(
+        cls,
+        drafts: tuple[ClaimDraftDto, ...],
+        evidence: EvidenceBundleDto,
+    ) -> tuple[tuple[ClaimDraftDto, ...], ...]:
+        path_by_evidence = {
+            item.evidence_id: item.relative_path for item in evidence.items
+        }
+        groups: list[tuple[ClaimDraftDto, ...]] = []
+        for path in sorted(set(path_by_evidence.values())):
+            groups.append(
+                tuple(
+                    draft
+                    for draft in drafts
+                    if path
+                    in {
+                        path_by_evidence[evidence_id]
+                        for evidence_id in draft.evidence_ids
+                    }
+                )
+            )
+        groups.append(tuple(sorted(drafts, key=lambda item: item.statement.casefold())))
+        for kind in sorted({draft.kind for draft in drafts}, key=lambda item: item.value):
+            groups.append(
+                tuple(
+                    sorted(
+                        (draft for draft in drafts if draft.kind is kind),
+                        key=lambda item: item.statement.casefold(),
+                    )
+                )
+            )
+
+        batches: list[tuple[ClaimDraftDto, ...]] = []
+        seen: set[tuple[str, ...]] = set()
+        for group in groups:
+            for batch in cls._windows(group):
+                key = tuple(sorted(draft.draft_id for draft in batch))
+                if len(batch) < 2 or key in seen:
+                    continue
+                seen.add(key)
+                batches.append(batch)
+        return tuple(batches)
+
+    @staticmethod
+    def _windows(
+        drafts: tuple[ClaimDraftDto, ...],
+    ) -> tuple[tuple[ClaimDraftDto, ...], ...]:
+        if len(drafts) <= _MAX_RELATION_BATCH_CLAIMS:
+            return (drafts,)
+        stride = _MAX_RELATION_BATCH_CLAIMS - _RELATION_BATCH_OVERLAP
+        return tuple(
+            drafts[start : start + _MAX_RELATION_BATCH_CLAIMS]
+            for start in range(0, len(drafts), stride)
+            if len(drafts[start : start + _MAX_RELATION_BATCH_CLAIMS]) >= 2
+        )
+
+    @staticmethod
+    def _merge_relations(
+        relations: list[ClaimRelationDraftDto],
+    ) -> tuple[ClaimRelationDraftDto, ...]:
+        by_pair: dict[frozenset[str], ClaimRelationDraftDto] = {}
+        for relation in relations:
+            pair = frozenset((relation.left_draft_id, relation.right_draft_id))
+            existing = by_pair.get(pair)
+            if existing is not None and existing.relation is not relation.relation:
+                raise revision_error("CLAIM_LEDGER_INVALID", {"reason": "relation_conflict"})
+            by_pair[pair] = relation
+        return tuple(
+            sorted(
+                by_pair.values(),
+                key=lambda item: (
+                    min(item.left_draft_id, item.right_draft_id),
+                    max(item.left_draft_id, item.right_draft_id),
+                ),
+            )
+        )
+
     @staticmethod
     def _repair_instruction() -> str:
         return (
             "\n\n<validation_feedback process=\"as-policy-data\">\n"
-            "이전 응답이 관계 JSON 계약을 통과하지 못했다. 알려진 draft_id만 사용하고, "
+            "이전 응답이 관계 JSON 계약을 통과하지 못했다. 알려진 claim_ref만 사용하고, "
             "자기 관계와 중복 쌍을 제거한 output_schema JSON 객체만 다시 작성하라. 관련 쌍이 "
             "없으면 relations=[]를 사용한다.\n"
             "</validation_feedback>"
@@ -85,6 +209,7 @@ class StructuredClaimRelationGenerator:
         drafts: tuple[ClaimDraftDto, ...],
         evidence: EvidenceBundleDto,
         instruction: str,
+        reference_by_draft: dict[str, str],
     ) -> str:
         path_by_evidence = {
             item.evidence_id: item.relative_path for item in evidence.items
@@ -93,7 +218,7 @@ class StructuredClaimRelationGenerator:
             "instruction": instruction,
             "claims": [
                 {
-                    "draft_id": draft.draft_id,
+                    "claim_ref": reference_by_draft[draft.draft_id],
                     "kind": draft.kind.value,
                     "statement": draft.statement,
                     "preconditions": list(draft.preconditions),
@@ -109,8 +234,8 @@ class StructuredClaimRelationGenerator:
         schema = {
             "relations": [
                 {
-                    "left_draft_id": "Claim draft ID",
-                    "right_draft_id": "다른 Claim draft ID",
+                    "left_claim_ref": "C000001",
+                    "right_claim_ref": "다른 Claim ref",
                     "relation": (
                         "EXACT_DUPLICATE|SEMANTIC_EQUIVALENT|COMPLEMENTARY|"
                         "CONTEXTUAL_REPEAT|CONFLICT"
@@ -137,7 +262,7 @@ class StructuredClaimRelationGenerator:
     def _parse(
         cls,
         raw: str,
-        known_drafts: set[str],
+        draft_by_reference: dict[str, str],
     ) -> tuple[ClaimRelationDraftDto, ...]:
         value = cls._mapping(json.loads(raw.strip()))
         if set(value) != {"relations", "completion_marker"}:
@@ -145,7 +270,7 @@ class StructuredClaimRelationGenerator:
         if value["completion_marker"] != "RELATIONS_COMPLETE":
             raise ValueError("claim relation output incomplete")
         relations = tuple(
-            cls._relation(item, known_drafts)
+            cls._relation(item, draft_by_reference)
             for item in cls._list(value["relations"])
         )
         pairs = {
@@ -160,16 +285,22 @@ class StructuredClaimRelationGenerator:
     def _relation(
         cls,
         value: Any,
-        known_drafts: set[str],
+        draft_by_reference: dict[str, str],
     ) -> ClaimRelationDraftDto:
         item = cls._mapping(value)
-        if set(item) != {"left_draft_id", "right_draft_id", "relation"}:
+        if set(item) != {"left_claim_ref", "right_claim_ref", "relation"}:
             raise ValueError("unexpected claim relation item fields")
-        left = cls._string(item["left_draft_id"])
-        right = cls._string(item["right_draft_id"])
+        left_reference = cls._string(item["left_claim_ref"])
+        right_reference = cls._string(item["right_claim_ref"])
         relation = ClaimRelationType(cls._string(item["relation"]))
-        if {left, right} - known_drafts or relation not in _MEANINGFUL_RELATIONS:
+        if (
+            left_reference not in draft_by_reference
+            or right_reference not in draft_by_reference
+            or relation not in _MEANINGFUL_RELATIONS
+        ):
             raise ValueError("invalid claim relation")
+        left = draft_by_reference[left_reference]
+        right = draft_by_reference[right_reference]
         return ClaimRelationDraftDto(left, right, relation)
 
     @staticmethod

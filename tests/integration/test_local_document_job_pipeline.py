@@ -148,8 +148,8 @@ class _StructuredGenerator:
                             "task_id": "operations-guide",
                             "title": "운영 개요",
                             "objective": "검증된 운영 사실을 정리한다.",
-                            "owned_claim_ids": [
-                                claim["claim_id"] for claim in payload["claims"]
+                            "owned_claim_refs": [
+                                claim["claim_ref"] for claim in payload["claims"]
                             ],
                             "required_sections": ["overview"],
                             "depends_on_task_ids": [],
@@ -224,7 +224,7 @@ class LocalDocumentJobPipelineTest(unittest.TestCase):
                 "local/test-model",
                 "a" * 40,
                 16_384,
-                4_096,
+                8_192,
                 "운영 절차를 먼저 배치한다.",
                 "b" * 64,
                 2,
@@ -244,6 +244,24 @@ class LocalDocumentJobPipelineTest(unittest.TestCase):
                     ),
                 )
             )
+            stage_budgets: dict[str, tuple[int, str]] = {}
+
+            def claim_draft_factory(generator, budget, additional):
+                stage_budgets["claim_draft"] = (budget, additional)
+                return StructuredClaimDraftGenerator(generator, budget, additional)
+
+            def claim_relation_factory(generator, budget, additional):
+                stage_budgets["claim_relation"] = (budget, additional)
+                return StructuredClaimRelationGenerator(generator, budget, additional)
+
+            def task_definition_factory(generator, budget, additional):
+                stage_budgets["task_plan"] = (budget, additional)
+                return StructuredTaskDefinitionGenerator(generator, budget, additional)
+
+            def task_output_factory(generator, budget, additional):
+                stage_budgets["task_output"] = (budget, additional)
+                return StructuredTaskOutputGenerator(generator, budget, additional)
+
             stages = LocalDocumentJobStages(
                 artifacts,
                 FilesystemDocumentJobDefinitionRepository(artifacts),
@@ -266,10 +284,10 @@ class LocalDocumentJobPipelineTest(unittest.TestCase):
                     1_000_000,
                 ),
                 model_factory=lambda _: _StructuredGenerator(),
-                claim_draft_generator_factory=StructuredClaimDraftGenerator,
-                claim_relation_generator_factory=StructuredClaimRelationGenerator,
-                task_definition_generator_factory=StructuredTaskDefinitionGenerator,
-                task_output_generator_factory=StructuredTaskOutputGenerator,
+                claim_draft_generator_factory=claim_draft_factory,
+                claim_relation_generator_factory=claim_relation_factory,
+                task_definition_generator_factory=task_definition_factory,
+                task_output_generator_factory=task_output_factory,
                 file_digest=sha256_file,
             ).stages()
 
@@ -278,6 +296,10 @@ class LocalDocumentJobPipelineTest(unittest.TestCase):
             )
             self.assertEqual(completed.state, DocumentJobState.COMPLETED)
             self.assertEqual(completed.last_percentage, 100)
+            self.assertEqual(stage_budgets["claim_draft"][0], 2_048)
+            self.assertEqual(stage_budgets["claim_relation"], (2_048, ""))
+            self.assertEqual(stage_budgets["task_plan"][0], 4_096)
+            self.assertEqual(stage_budgets["task_output"][0], 8_192)
             self.assertEqual(len(asyncio.run(jobs.list_after(job.job_id))), 10)
             published = output_root / "runs" / job.job_id
             self.assertTrue((published / "documents/generated.md").is_file())
