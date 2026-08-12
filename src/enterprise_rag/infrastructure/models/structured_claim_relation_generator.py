@@ -51,17 +51,34 @@ class StructuredClaimRelationGenerator:
         if len(drafts) < 2:
             return ()
         await self._generator.prepare()
-        try:
-            raw = await self._generator.generate(
-                self._system_prompt,
-                self._prompt(drafts, evidence, instruction),
-                self._max_output_tokens,
-            )
-            return self._parse(raw, {draft.draft_id for draft in drafts})
-        except ApplicationError:
-            raise
-        except (KeyError, TypeError, ValueError) as error:
-            raise revision_error("CLAIM_LEDGER_INVALID") from error
+        prompt = self._prompt(drafts, evidence, instruction)
+        known_drafts = {draft.draft_id for draft in drafts}
+        last_error: Exception | None = None
+        for attempt in range(1, 3):
+            try:
+                raw = await self._generator.generate(
+                    self._system_prompt,
+                    prompt,
+                    self._max_output_tokens,
+                )
+                return self._parse(raw, known_drafts)
+            except ApplicationError:
+                raise
+            except (KeyError, TypeError, ValueError) as error:
+                last_error = error
+                if attempt == 1:
+                    prompt += self._repair_instruction()
+        raise revision_error("CLAIM_LEDGER_INVALID", {"attempts": 2}) from last_error
+
+    @staticmethod
+    def _repair_instruction() -> str:
+        return (
+            "\n\n<validation_feedback process=\"as-policy-data\">\n"
+            "이전 응답이 관계 JSON 계약을 통과하지 못했다. 알려진 draft_id만 사용하고, "
+            "자기 관계와 중복 쌍을 제거한 output_schema JSON 객체만 다시 작성하라. 관련 쌍이 "
+            "없으면 relations=[]를 사용한다.\n"
+            "</validation_feedback>"
+        )
 
     @staticmethod
     def _prompt(

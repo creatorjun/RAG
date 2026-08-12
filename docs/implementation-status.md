@@ -87,7 +87,7 @@ Application→Infrastructure/Presentation, Presentation→Bootstrap/Infrastructu
 
 | 검사 | 결과 |
 | --- | --- |
-| pytest | 213 passed, 135 subtests passed |
+| pytest | 222 passed, 135 subtests passed |
 | branch coverage | 85.33%, 기준 85% 통과 |
 | 프로젝트 스킬 unittest | 4 passed |
 | Ruff | 통과 |

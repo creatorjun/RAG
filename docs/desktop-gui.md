@@ -145,6 +145,14 @@ Job 생성은 백그라운드에서 모델 선택을 다시 검증하고, cache 
 파일 존재만으로 저장 완료를 판정하지 않는다. JSON schema, Job ID, 입력 hash와 문서 digest를
 검증한 경우만 `저장됨`으로 표시한다. 부분 파일과 알 수 없는 파일은 `손상/검토 필요`다.
 
+Claim 추출에서 기술적으로 관련된 내용이 없는 Evidence는 원본·Evidence 감사 기록에는 보존하되
+Claim, Task와 최종 문서 coverage에서는 제외한다. 기술 Claim이 있는 Evidence만 Claim Ledger의
+검토 완료 집합에 들어가며, 최종 품질 게이트는 이 집합의 100% coverage를 요구한다.
+
+Worker 오류로 `FAILED`가 된 Job은 명시적인 `실패 지점부터 복구` 동작으로 `CREATED`에 재등록한
+뒤 저장된 체크포인트를 순서대로 재검증한다. 기존 진행 이벤트와 진행률은 유지하고, 유효한
+manifest·Evidence·Claim·Task 결과는 다시 생성하지 않는다.
+
 ### 4.3 이벤트와 품질 상세
 
 - sequence 순서의 단계 이벤트 타임라인

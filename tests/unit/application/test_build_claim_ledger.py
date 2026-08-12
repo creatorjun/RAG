@@ -103,6 +103,21 @@ class BuildClaimLedgerTest(unittest.TestCase):
             tuple(sorted((first_evidence.evidence_id, second_evidence.evidence_id))),
         )
 
+    def test_excludes_evidence_without_technical_claims_from_reviewed_coverage(self) -> None:
+        technical = _evidence("a")
+        irrelevant = _evidence("d")
+        evidence = EvidenceBundleDto((technical, irrelevant), 1, 2)
+        draft = ClaimDraftDto(
+            "draft:1",
+            ClaimKind.FACT,
+            "SELinux는 Enforcing이다.",
+            (technical.evidence_id,),
+        )
+
+        ledger = BuildClaimLedger().execute(evidence, (draft,))
+
+        self.assertEqual(ledger.reviewed_evidence_ids, (technical.evidence_id,))
+
     def test_rejects_unknown_evidence_and_conflicting_relation_labels(self) -> None:
         evidence = EvidenceBundleDto((_evidence(),), 1, 1)
         unknown = ClaimDraftDto(

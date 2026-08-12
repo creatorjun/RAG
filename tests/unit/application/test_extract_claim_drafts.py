@@ -26,10 +26,17 @@ def _evidence(identifier: str, path: str) -> EvidenceItemDto:
 
 
 class _Generator:
-    def __init__(self, wrong_evidence: bool = False) -> None:
+    def __init__(
+        self,
+        wrong_evidence: bool = False,
+        irrelevant_paths: tuple[str, ...] = (),
+    ) -> None:
         self.wrong_evidence = wrong_evidence
+        self.irrelevant_paths = irrelevant_paths
 
     async def generate(self, evidence, instruction):
+        if evidence.relative_path in self.irrelevant_paths:
+            return ()
         evidence_id = (
             "evidence:sha256:" + "f" * 64
             if self.wrong_evidence
@@ -63,6 +70,29 @@ class ExtractClaimDraftsTest(unittest.TestCase):
             )
         )
         self.assertEqual(len(drafts), 2)
+        self.assertEqual(progress[-1][:2], (2, 2))
+
+    def test_reviews_irrelevant_evidence_without_creating_a_claim(self) -> None:
+        evidence = EvidenceBundleDto(
+            (_evidence("a", "technical.md"), _evidence("b", "lunch-menu.md")),
+            2,
+            2,
+        )
+        progress = []
+
+        drafts = asyncio.run(
+            ExtractClaimDrafts(
+                _Generator(irrelevant_paths=("lunch-menu.md",))
+            ).execute(
+                evidence,
+                "기술 문서 작성",
+                lambda completed, total, evidence_id: progress.append(
+                    (completed, total, evidence_id)
+                ),
+            )
+        )
+
+        self.assertEqual(len(drafts), 1)
         self.assertEqual(progress[-1][:2], (2, 2))
 
     def test_rejects_claim_that_references_another_evidence_item(self) -> None:

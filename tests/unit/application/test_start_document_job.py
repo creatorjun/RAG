@@ -15,6 +15,17 @@ class _Jobs:
     async def get(self, job_id: str) -> DocumentJob | None:
         return self.job
 
+    async def transition(
+        self,
+        job_id: str,
+        expected: DocumentJobState,
+        target: DocumentJobState,
+    ) -> DocumentJob:
+        assert self.job is not None
+        assert self.job.state is expected
+        self.job = self.job.transition(target)
+        return self.job
+
 
 class _Launcher:
     def __init__(self) -> None:
@@ -49,6 +60,24 @@ class StartDocumentJobTest(unittest.TestCase):
             with self.subTest(job=job), self.assertRaises(ApplicationError):
                 asyncio.run(StartDocumentJob(_Jobs(job), launcher).execute(job_id))
         self.assertEqual(launcher.calls, [])
+
+    def test_requeues_failed_job_before_launching_from_saved_checkpoints(self) -> None:
+        launcher = _Launcher()
+        job = DocumentJob(
+            "job-" + "e" * 32,
+            DocumentJobState.FAILED,
+            last_event_sequence=3,
+            last_percentage=30,
+        )
+        jobs = _Jobs(job)
+
+        result = asyncio.run(StartDocumentJob(jobs, launcher).execute(job.job_id))
+
+        self.assertEqual(result.process_id, 321)
+        self.assertEqual(result.job.state, DocumentJobState.CREATED)
+        self.assertEqual(result.job.last_event_sequence, 3)
+        self.assertEqual(result.job.last_percentage, 30)
+        self.assertEqual(launcher.calls, [job.job_id])
 
 
 if __name__ == "__main__":

@@ -27,6 +27,17 @@ class _TextGenerator:
         return self.response
 
 
+class _SequenceTextGenerator(_TextGenerator):
+    def __init__(self, responses: list[str]) -> None:
+        super().__init__(responses[-1])
+        self.responses = iter(responses)
+        self.prompts: list[str] = []
+
+    async def generate(self, system_prompt, user_prompt, max_output_tokens):
+        self.prompts.append(user_prompt)
+        return next(self.responses)
+
+
 def _fixture() -> tuple[tuple[ClaimDraftDto, ...], EvidenceBundleDto]:
     evidence_items = tuple(
         EvidenceItemDto(
@@ -110,6 +121,23 @@ class StructuredClaimRelationGeneratorTest(unittest.TestCase):
         with self.assertRaises(ApplicationError) as captured:
             asyncio.run(generator.generate(drafts, evidence, "서비스 운영 문서"))
         self.assertEqual(captured.exception.code, "CLAIM_LEDGER_INVALID")
+
+    def test_repairs_invalid_relation_output_once(self) -> None:
+        drafts, evidence = _fixture()
+        valid = json.dumps(
+            {"relations": [], "completion_marker": "RELATIONS_COMPLETE"}
+        )
+        text_generator = _SequenceTextGenerator(["not-json", valid])
+
+        relations = asyncio.run(
+            StructuredClaimRelationGenerator(text_generator, 1024).generate(
+                drafts, evidence, "서비스 운영 문서"
+            )
+        )
+
+        self.assertEqual(relations, ())
+        self.assertEqual(len(text_generator.prompts), 2)
+        self.assertIn("validation_feedback", text_generator.prompts[1])
 
 
 if __name__ == "__main__":

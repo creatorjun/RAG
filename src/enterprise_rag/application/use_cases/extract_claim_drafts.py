@@ -26,7 +26,7 @@ class ExtractClaimDrafts:
         total = len(evidence.items)
         for index, item in enumerate(evidence.items, start=1):
             generated = await self._generator.generate(item, instruction.strip())
-            if not generated or any(
+            if any(
                 draft.evidence_ids != (item.evidence_id,) for draft in generated
             ):
                 raise revision_error(
@@ -37,6 +37,6 @@ class ExtractClaimDrafts:
             if progress is not None:
                 progress(index, total, item.evidence_id)
         draft_ids = [draft.draft_id for draft in drafts]
-        if len(draft_ids) != len(set(draft_ids)):
+        if not drafts or len(draft_ids) != len(set(draft_ids)):
             raise revision_error("CLAIM_LEDGER_INVALID")
         return tuple(drafts)

@@ -58,6 +58,20 @@ class DocumentJobTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             attention.transition(DocumentJobState.PUBLISHING)
 
+    def test_failed_job_can_be_explicitly_requeued_without_losing_progress(self) -> None:
+        failed = DocumentJob(
+            "job-" + "e" * 32,
+            DocumentJobState.FAILED,
+            last_event_sequence=3,
+            last_percentage=30,
+        )
+
+        requeued = failed.transition(DocumentJobState.CREATED)
+
+        self.assertEqual(requeued.state, DocumentJobState.CREATED)
+        self.assertEqual(requeued.last_event_sequence, 3)
+        self.assertEqual(requeued.last_percentage, 30)
+
 
 if __name__ == "__main__":
     unittest.main()

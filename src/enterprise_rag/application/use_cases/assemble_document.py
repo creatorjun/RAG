@@ -56,7 +56,16 @@ class AssembleDocument:
                 if "[evidence:" in rendered or "[source:" not in rendered:
                     raise revision_error("DOCUMENT_ASSEMBLY_FAILED")
                 parts.append(f"### {section.heading}\n\n{rendered}")
-        source_paths = sorted({item.relative_path for item in evidence.items})
+        included_evidence = {
+            entry.evidence_id for entry in plan.coverage.evidence_coverage
+        }
+        source_paths = sorted(
+            {
+                item.relative_path
+                for item in evidence.items
+                if item.evidence_id in included_evidence
+            }
+        )
         inventory = "\n".join(f"- `{path}`" for path in source_paths)
         parts.append(f"## 원본 문서 목록\n\n{inventory}")
         return "\n\n".join(parts).rstrip() + "\n"

@@ -39,7 +39,10 @@ class ValidateFinalDocument:
             errors.add("TASK_VALIDATION_INCOMPLETE")
 
         claim_ids = {claim.claim_id for claim in ledger.claims}
-        evidence_ids = {item.evidence_id for item in evidence.items}
+        all_evidence_ids = {item.evidence_id for item in evidence.items}
+        evidence_ids = set(ledger.reviewed_evidence_ids)
+        if not evidence_ids or not evidence_ids.issubset(all_evidence_ids):
+            errors.add("EVIDENCE_SELECTION_INVALID")
         covered_claims = {
             claim_id
             for output in outputs
@@ -64,7 +67,11 @@ class ValidateFinalDocument:
         ):
             errors.add("COVERAGE_MATRIX_MISMATCH")
 
-        source_paths = {item.relative_path for item in evidence.items}
+        source_paths = {
+            item.relative_path
+            for item in evidence.items
+            if item.evidence_id in evidence_ids
+        }
         cited_paths = set(_SOURCE_MARKER.findall(markdown))
         if markdown.count("[source:") != len(_SOURCE_MARKER.findall(markdown)):
             errors.add("SOURCE_MARKER_MALFORMED")

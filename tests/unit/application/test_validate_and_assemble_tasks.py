@@ -136,6 +136,49 @@ class ValidateAndAssembleTaskTest(unittest.TestCase):
         self.assertEqual(candidate.markdown, first)
         self.assertTrue(candidate.quality.valid)
 
+    def test_excludes_irrelevant_evidence_from_inventory_and_quality_coverage(self) -> None:
+        evidence, ledger, plan = _fixture()
+        irrelevant = EvidenceItemDto(
+            evidence_id="evidence:sha256:" + "e" * 64,
+            chunk_id="chunk:noise",
+            revision_id="revision:noise",
+            relative_path="lunch-menu.md",
+            source_sha256="f" * 64,
+            ordinal=0,
+            start_char=0,
+            end_char=4,
+            content_sha256="1" * 64,
+            text="점심 메뉴",
+        )
+        mixed_evidence = EvidenceBundleDto(
+            (*evidence.items, irrelevant),
+            2,
+            2,
+        )
+        output = _valid_output(plan)
+        report = ValidateTaskOutput().execute(plan.tasks[0], ledger, output)
+
+        markdown = AssembleDocument().execute(
+            "통합 가이드",
+            plan,
+            mixed_evidence,
+            (output,),
+            (report,),
+        )
+        quality = ValidateFinalDocument().execute(
+            markdown,
+            plan,
+            ledger,
+            mixed_evidence,
+            (output,),
+            (report,),
+        )
+
+        self.assertNotIn("lunch-menu.md", markdown)
+        self.assertTrue(quality.valid)
+        self.assertEqual(quality.evidence_count, 1)
+        self.assertEqual(quality.source_document_count, 2)
+
     def test_reports_missing_marker_claim_and_completion_without_throwing(self) -> None:
         _, ledger, plan = _fixture()
         packet = plan.tasks[0]

@@ -27,9 +27,9 @@ class PlanDocumentTasks:
     ) -> TaskPlanDto:
         if not instruction.strip():
             raise revision_error("INVALID_INPUT", {"field": "instruction"})
-        if set(ledger.reviewed_evidence_ids) != {
-            item.evidence_id for item in evidence.items
-        }:
+        known_evidence = {item.evidence_id for item in evidence.items}
+        reviewed_evidence = set(ledger.reviewed_evidence_ids)
+        if not reviewed_evidence or not reviewed_evidence.issubset(known_evidence):
             raise revision_error("COVERAGE_MATRIX_INCOMPLETE")
         definitions = await self._generator.generate(
             ledger,

@@ -72,6 +72,11 @@ class BuildClaimLedger:
                 raise revision_error("CLAIM_LEDGER_INVALID")
             relations_by_pair[(left, right)] = relation
         try:
+            reviewed_evidence = {
+                evidence_id
+                for claim in claims_by_id.values()
+                for evidence_id in claim.evidence_ids
+            }
             return ClaimLedgerDto(
                 claims=tuple(sorted(claims_by_id.values(), key=lambda item: item.claim_id)),
                 relations=tuple(
@@ -80,7 +85,7 @@ class BuildClaimLedger:
                         key=lambda item: (item.left_claim_id, item.right_claim_id),
                     )
                 ),
-                reviewed_evidence_ids=tuple(sorted(known_evidence)),
+                reviewed_evidence_ids=tuple(sorted(reviewed_evidence)),
             )
         except ValueError as error:
             raise revision_error("CLAIM_LEDGER_INVALID") from error

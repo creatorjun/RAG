@@ -76,6 +76,7 @@ _ALLOWED_TRANSITIONS[DocumentJobState.CANCELLING] = {
     DocumentJobState.CANCELLED,
     DocumentJobState.FAILED,
 }
+_ALLOWED_TRANSITIONS[DocumentJobState.FAILED] = {DocumentJobState.CREATED}
 
 
 @dataclass(frozen=True, slots=True)

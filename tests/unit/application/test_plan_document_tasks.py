@@ -74,6 +74,50 @@ class PlanDocumentTasksTest(unittest.TestCase):
             )
         self.assertEqual(captured.exception.code, "TASK_PLAN_INVALID")
 
+    def test_accepts_reviewed_evidence_subset_after_relevance_filtering(self) -> None:
+        relevant_id = "evidence:sha256:" + "a" * 64
+        irrelevant_id = "evidence:sha256:" + "e" * 64
+        claim_id = "claim:sha256:" + "b" * 64
+        items = tuple(
+            EvidenceItemDto(
+                evidence_id,
+                f"chunk:{index}",
+                "revision:1",
+                path,
+                "c" * 64,
+                0,
+                0,
+                4,
+                chr(100 + index) * 64,
+                "text",
+            )
+            for index, (evidence_id, path) in enumerate(
+                ((relevant_id, "guide.md"), (irrelevant_id, "lunch.md"))
+            )
+        )
+        evidence = EvidenceBundleDto(items, 2, 2)
+        ledger = ClaimLedgerDto(
+            (ClaimDto(claim_id, ClaimKind.FACT, "기술 사실", (relevant_id,)),),
+            (),
+            (relevant_id,),
+        )
+        definition = TaskDefinitionDto(
+            "technical-task",
+            "기술 운영",
+            "기술 사실 작성",
+            (claim_id,),
+            ("개요",),
+        )
+
+        plan = asyncio.run(
+            PlanDocumentTasks(_Generator((definition,)), BuildTaskPlan()).execute(
+                ledger, evidence, "기술 문서 작성"
+            )
+        )
+
+        self.assertEqual(plan.coverage.source_evidence_count, 1)
+        self.assertEqual(plan.tasks[0].allowed_evidence_ids, (relevant_id,))
+
 
 if __name__ == "__main__":
     unittest.main()

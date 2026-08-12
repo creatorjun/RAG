@@ -23,6 +23,12 @@ class StartDocumentJob:
         job = await self._jobs.get(job_id)
         if job is None:
             raise revision_error("JOB_NOT_FOUND", {"job_id": job_id})
+        if job.state is DocumentJobState.FAILED:
+            job = await self._jobs.transition(
+                job_id,
+                DocumentJobState.FAILED,
+                DocumentJobState.CREATED,
+            )
         if job.state.terminal or job.state in {
             DocumentJobState.CANCELLING,
             DocumentJobState.NEEDS_ATTENTION,

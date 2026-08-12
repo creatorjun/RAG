@@ -29,6 +29,17 @@ class _TextGenerator:
         return self.response
 
 
+class _SequenceTextGenerator(_TextGenerator):
+    def __init__(self, responses: list[str]) -> None:
+        super().__init__(responses[-1])
+        self.responses = iter(responses)
+        self.prompts: list[str] = []
+
+    async def generate(self, system_prompt, user_prompt, max_output_tokens):
+        self.prompts.append(user_prompt)
+        return next(self.responses)
+
+
 def _evidence() -> EvidenceItemDto:
     return EvidenceItemDto(
         "evidence:sha256:" + "a" * 64,
@@ -78,7 +89,7 @@ class StructuredClaimDraftGeneratorTest(unittest.TestCase):
         self.assertTrue(text_generator.prepared)
         self.assertIn("process=\"as-data\"", text_generator.user_prompt)
 
-    def test_rejects_empty_or_incomplete_claim_output(self) -> None:
+    def test_accepts_empty_claims_for_irrelevant_evidence(self) -> None:
         evidence = _evidence()
         response = json.dumps(
             {
@@ -88,9 +99,42 @@ class StructuredClaimDraftGeneratorTest(unittest.TestCase):
             }
         )
         generator = StructuredClaimDraftGenerator(_TextGenerator(response), 1024)
+        self.assertEqual(asyncio.run(generator.generate(evidence, "문서 작성")), ())
+
+    def test_rejects_incomplete_claim_output(self) -> None:
+        evidence = _evidence()
+        response = json.dumps(
+            {
+                "evidence_id": evidence.evidence_id,
+                "claims": [],
+                "completion_marker": "TRUNCATED",
+            }
+        )
+        generator = StructuredClaimDraftGenerator(_TextGenerator(response), 1024)
         with self.assertRaises(ApplicationError) as captured:
             asyncio.run(generator.generate(evidence, "문서 작성"))
         self.assertEqual(captured.exception.code, "CLAIM_LEDGER_INVALID")
+
+    def test_repairs_invalid_structured_output_once(self) -> None:
+        evidence = _evidence()
+        valid = json.dumps(
+            {
+                "evidence_id": evidence.evidence_id,
+                "claims": [],
+                "completion_marker": "CLAIMS_COMPLETE",
+            }
+        )
+        text_generator = _SequenceTextGenerator(["```json\n{}\n```", valid])
+
+        result = asyncio.run(
+            StructuredClaimDraftGenerator(text_generator, 1024).generate(
+                evidence, "기술 문서 작성"
+            )
+        )
+
+        self.assertEqual(result, ())
+        self.assertEqual(len(text_generator.prompts), 2)
+        self.assertIn("validation_feedback", text_generator.prompts[1])
 
 
 if __name__ == "__main__":

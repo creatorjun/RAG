@@ -58,6 +58,9 @@ _ERROR_GUIDANCE = {
     "SETTINGS_REVISION_CONFLICT": (
         "설정 탭에서 다시 불러오기를 누른 뒤 변경사항을 다시 적용하세요."
     ),
+    "CLAIM_LEDGER_INVALID": (
+        "저장된 Evidence는 유지됩니다. 문제를 수정한 뒤 `실패 지점부터 복구`를 누르세요."
+    ),
 }
 
 
@@ -1668,13 +1671,19 @@ class _DesktopWindow:
         self._set_tone(self._state, tone)
         self._progress.setValue(job.last_percentage)
         self._progress_value.setText(f"{job.last_percentage}%")
-        self._start_button.setText(
-            "파이프라인 재개" if job.last_percentage else "파이프라인 시작"
-        )
+        if job.state is DocumentJobState.FAILED:
+            self._start_button.setText("실패 지점부터 복구")
+        else:
+            self._start_button.setText(
+                "파이프라인 재개" if job.last_percentage else "파이프라인 시작"
+            )
         self._start_button.setEnabled(
-            not job.state.terminal
-            and job.state
-            not in {DocumentJobState.CANCELLING, DocumentJobState.NEEDS_ATTENTION}
+            job.state is DocumentJobState.FAILED
+            or (
+                not job.state.terminal
+                and job.state
+                not in {DocumentJobState.CANCELLING, DocumentJobState.NEEDS_ATTENTION}
+            )
         )
         self._cancel_job_button.setEnabled(
             not job.state.terminal and job.state is not DocumentJobState.CANCELLING

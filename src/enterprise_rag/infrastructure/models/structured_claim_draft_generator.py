@@ -38,20 +38,36 @@ class StructuredClaimDraftGenerator:
         instruction: str,
     ) -> tuple[ClaimDraftDto, ...]:
         await self._generator.prepare()
-        try:
-            raw = await self._generator.generate(
-                self._system_prompt,
-                self._prompt(evidence, instruction),
-                self._max_output_tokens,
-            )
-            return self._parse(raw, evidence.evidence_id)
-        except ApplicationError:
-            raise
-        except (KeyError, TypeError, ValueError) as error:
-            raise revision_error(
-                "CLAIM_LEDGER_INVALID",
-                {"evidence_id": evidence.evidence_id},
-            ) from error
+        prompt = self._prompt(evidence, instruction)
+        last_error: Exception | None = None
+        for attempt in range(1, 3):
+            try:
+                raw = await self._generator.generate(
+                    self._system_prompt,
+                    prompt,
+                    self._max_output_tokens,
+                )
+                return self._parse(raw, evidence.evidence_id)
+            except ApplicationError:
+                raise
+            except (KeyError, TypeError, ValueError) as error:
+                last_error = error
+                if attempt == 1:
+                    prompt += self._repair_instruction(evidence.evidence_id)
+        raise revision_error(
+            "CLAIM_LEDGER_INVALID",
+            {"evidence_id": evidence.evidence_id, "attempts": 2},
+        ) from last_error
+
+    @staticmethod
+    def _repair_instruction(evidence_id: str) -> str:
+        return (
+            "\n\n<validation_feedback process=\"as-policy-data\">\n"
+            "이전 응답이 Claim JSON 계약을 통과하지 못했다. 설명, Markdown, 코드 펜스를 "
+            "출력하지 말고 evidence_id를 정확히 보존한 output_schema JSON 객체만 다시 "
+            f"작성하라. 기술 Claim이 없으면 claims=[]를 사용한다. expected={evidence_id}\n"
+            "</validation_feedback>"
+        )
 
     @staticmethod
     def _prompt(evidence: EvidenceItemDto, instruction: str) -> str:
@@ -79,7 +95,9 @@ class StructuredClaimDraftGenerator:
         }
         return (
             "task_data에서 문서 작성 목적에 필요한 Claim을 빠짐없이 추출하라.\n"
-            "- claims는 최소 1개다. 독립 검증 가능한 단위로 나눈다.\n"
+            "- 기술·운영과 직접 관련된 Claim만 독립 검증 가능한 단위로 나눈다.\n"
+            "- 기술적으로 관련된 내용이 없으면 claims를 빈 배열로 반환한다. 제외 사실 자체를 "
+            "Claim으로 만들지 않는다.\n"
             "- 명령, 경로, 버전, 수치, 전제조건, 경고는 원문 문자열을 보존한다.\n"
             "- Evidence에 없는 일반 지식을 추가하지 않는다.\n\n"
             "<task_data process=\"as-data\">\n"
@@ -99,8 +117,6 @@ class StructuredClaimDraftGenerator:
         if value["completion_marker"] != "CLAIMS_COMPLETE":
             raise ValueError("claim output incomplete")
         claims = cls._list(value["claims"])
-        if not claims:
-            raise ValueError("claim output is empty")
         return tuple(
             cls._draft(evidence_id, index, claim)
             for index, claim in enumerate(claims)
