@@ -1,0 +1,93 @@
+schema_version: 1
+oracle_id: "oracle-linux-9.8-noise-v1"
+dataset_id: "oracle-linux-9.8-quick-test-v2"
+target: "Oracle Linux 9.8 현재 운영용 RAG 기술 문서"
+
+required_current_facts:
+  - id: "systemd-limit-nofile"
+    source: "08-mixed-communications-and-runtime-notes.md"
+    required_terms:
+      - "example-api.service"
+      - "LimitNOFILE=65536"
+    rationale: "혼합 문서 안의 유효한 기술 정보가 누락되지 않아야 한다."
+  - id: "systemd-timeout-stop"
+    source: "08-mixed-communications-and-runtime-notes.md"
+    required_terms:
+      - "TimeoutStopSec=45s"
+      - "systemctl daemon-reload"
+    rationale: "승인된 설정값과 적용 절차를 함께 보존해야 한다."
+  - id: "current-service-port"
+    source: "06-service-operations-runbook.md"
+    required_terms:
+      - "8443/tcp"
+    rationale: "기각된 8080 주장보다 현재 승인 포트를 우선해야 한다."
+
+nontechnical_forbidden_literals:
+  - "파란 수달처럼 민첩하게"
+  - "해물 크림 파스타"
+  - "사내 사진 동호회"
+  - "창가 선호도 설문"
+  - "경품 추첨"
+  - "짙은 남색 복장"
+  - "케이터링 수량"
+
+secret_literals_forbidden:
+  - "demo-token-plain-text-DO-NOT-USE"
+
+rejected_claims_not_to_present_as_current:
+  - id: "open-port-8080-worldwide"
+    literals:
+      - "0.0.0.0:8080"
+    required_qualifiers_if_retained:
+      - "기각"
+      - "금지"
+      - "사용하지"
+  - id: "disable-security-controls"
+    literals:
+      - "SELinux와 firewalld를 모두 끈다"
+    required_qualifiers_if_retained:
+      - "기각"
+      - "금지"
+      - "사용하지"
+  - id: "unbounded-restart"
+    literals:
+      - "제한 없이 자동 재시작"
+    required_qualifiers_if_retained:
+      - "기각"
+      - "금지"
+      - "사용하지"
+
+superseded_claims_not_to_present_as_current:
+  - id: "legacy-network-scripts"
+    literals:
+      - "/etc/sysconfig/network-scripts/ifcfg-eth0"
+      - "service network restart"
+    required_qualifiers_if_retained:
+      - "Oracle Linux 7"
+      - "폐기"
+      - "레거시"
+      - "마이그레이션"
+  - id: "legacy-iptables-disable"
+    literals:
+      - "chkconfig iptables off"
+      - "systemctl disable --now firewalld"
+    required_qualifiers_if_retained:
+      - "폐기"
+      - "금지"
+      - "과거"
+  - id: "legacy-selinux-disable"
+    literals:
+      - "SELINUX=disabled"
+      - "setenforce 0"
+    required_qualifiers_if_retained:
+      - "폐기"
+      - "금지"
+      - "과거"
+
+acceptance_metrics:
+  current_fact_recall: 1.0
+  nontechnical_literal_leakage: 0
+  secret_literal_leakage: 0
+  rejected_claims_presented_as_current: 0
+  superseded_claims_presented_as_current: 0
+  duplicate_current_procedures: 0

@@ -1,11 +1,11 @@
 # data/before/oracle-linux-9.8/dataset.yaml
 schema_version: 1
-dataset_id: "oracle-linux-9.8-quick-test-v1"
+dataset_id: "oracle-linux-9.8-quick-test-v2"
 title: "Oracle Linux 9.8 사내 운영 기술 문서 샘플"
 language: "ko-KR"
 security_label: "internal"
 source_kind: "synthetic-official-based"
-captured_at: "2026-08-10T00:00:00Z"
+captured_at: "2026-08-12T00:00:00Z"
 operating_system:
   product: "Oracle Linux"
   major_version: 9
@@ -23,6 +23,8 @@ documents:
   - "04-storage-backup-and-kdump.md"
   - "05-security-hardening.md"
   - "06-service-operations-runbook.md"
+  - "07-superseded-legacy-administration.md"
+  - "08-mixed-communications-and-runtime-notes.md"
 intended_tests:
   - "markdown_parsing"
   - "technical_classification"
@@ -31,6 +33,12 @@ intended_tests:
   - "official_web_validation"
   - "hierarchical_synthesis"
   - "before_after_comparison"
+  - "nontechnical_content_exclusion"
+  - "superseded_knowledge_qualification"
+  - "rejected_claim_exclusion"
+  - "secret_literal_redaction"
+  - "mixed_document_technical_fact_recall"
+quality_oracle: "tests/fixtures/quality/oracle-linux-9.8-noise-oracle.yaml"
 source_urls:
   - "https://docs.oracle.com/en/operating-systems/oracle-linux/9/"
   - "https://docs.oracle.com/en/operating-systems/oracle-linux/9/relnotes9.8/"
