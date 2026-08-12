@@ -4,13 +4,16 @@ import argparse
 import asyncio
 import json
 import os
+import signal
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 from enterprise_rag.application.dto.jobs import DocumentJobDto
 from enterprise_rag.application.dto.runner import RunnerLifecycle
-from enterprise_rag.bootstrap import JobWorkerApplication, build_job_worker_application
+from enterprise_rag.application.runtime import JobWorkerApplication
 from enterprise_rag.domain.errors import ApplicationError
+from enterprise_rag.domain.jobs import DocumentJobState
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -51,6 +54,24 @@ async def _run_owned_job(
     pid = os.getpid()
     leases = application.runner_leases
     clock = application.clock
+    loop = asyncio.get_running_loop()
+    termination = application.termination
+    confirmation_task: asyncio.Task[DocumentJobDto] | None = None
+
+    def request_cancellation() -> None:
+        nonlocal confirmation_task
+        termination.request()
+        if confirmation_task is None:
+            confirmation_task = loop.create_task(
+                application.confirm_document_job_cancellation.execute(job_id)
+            )
+
+    signal_registered = False
+    try:
+        loop.add_signal_handler(signal.SIGTERM, request_cancellation)
+        signal_registered = True
+    except (NotImplementedError, RuntimeError):
+        signal_registered = False
     await leases.claim(job_id, runner_token, pid, clock.now())
     run_task = asyncio.create_task(application.run_document_job.execute(job_id))
     heartbeat_task = asyncio.create_task(
@@ -66,6 +87,14 @@ async def _run_owned_job(
                 heartbeat_task.result()
                 raise RuntimeError("heartbeat loop stopped unexpectedly")
             result = await run_task
+            if result.state is DocumentJobState.COMPLETED:
+                try:
+                    await application.notify_document_job_completion.execute(job_id)
+                except Exception:
+                    # Notification delivery is an auxiliary side effect. The durable
+                    # publication remains successful and the GUI can retry an unclaimed
+                    # receipt without changing the Job result.
+                    pass
         finally:
             if not heartbeat_task.done():
                 heartbeat_task.cancel()
@@ -103,9 +132,17 @@ async def _run_owned_job(
         if not run_task.done():
             run_task.cancel()
             await asyncio.gather(run_task, return_exceptions=True)
+        if confirmation_task is not None:
+            await asyncio.gather(confirmation_task, return_exceptions=True)
+        if signal_registered:
+            loop.remove_signal_handler(signal.SIGTERM)
+        termination.close()
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(
+    application_factory: Callable[[Path, str | None], JobWorkerApplication],
+    argv: list[str] | None = None,
+) -> int:
     args = _parser().parse_args(argv)
     try:
         os.fstat(args.lock_fd)
@@ -113,7 +150,7 @@ def main(argv: list[str] | None = None) -> int:
         print("runner lock descriptor is not available", file=sys.stderr)
         return 2
     try:
-        with build_job_worker_application(
+        with application_factory(
             args.project_root,
             args.environment,
         ) as application:
@@ -150,7 +187,3 @@ def main(argv: list[str] | None = None) -> int:
         )
     )
     return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

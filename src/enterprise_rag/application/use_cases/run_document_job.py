@@ -2,11 +2,15 @@ from __future__ import annotations
 
 from enterprise_rag.application.dto.jobs import DocumentJobDto
 from enterprise_rag.application.dto.progress import ProgressEventDto
+from enterprise_rag.application.ports.cancellation import CancellationTokenPort
 from enterprise_rag.application.ports.job_repository import DocumentJobRepositoryPort
 from enterprise_rag.application.ports.job_stage import DocumentJobStagePort
 from enterprise_rag.application.ports.progress_events import ProgressEventPublisherPort
-from enterprise_rag.domain.errors import ApplicationError, revision_error
-from enterprise_rag.domain.jobs import DocumentJobState
+from enterprise_rag.application.services.document_job_cancellation import (
+    DocumentJobCancellationService,
+)
+from enterprise_rag.domain.errors import ApplicationError, ErrorCategory, revision_error
+from enterprise_rag.domain.jobs import DocumentJob, DocumentJobState
 
 _ACTIVE_FLOW = (
     DocumentJobState.INSPECTING,
@@ -28,6 +32,7 @@ class RunDocumentJob:
         jobs: DocumentJobRepositoryPort,
         events: ProgressEventPublisherPort,
         stages: tuple[DocumentJobStagePort, ...],
+        cancellation: CancellationTokenPort | None = None,
     ) -> None:
         states = tuple(stage.state for stage in stages)
         if states != _ACTIVE_FLOW:
@@ -35,6 +40,8 @@ class RunDocumentJob:
         self._jobs = jobs
         self._events = events
         self._stages = stages
+        self._cancellation = cancellation
+        self._cancellations = DocumentJobCancellationService(jobs)
 
     async def execute(self, job_id: str) -> DocumentJobDto:
         job = await self._jobs.get(job_id)
@@ -42,13 +49,9 @@ class RunDocumentJob:
             raise revision_error("JOB_NOT_FOUND", {"job_id": job_id})
         if job.state.terminal:
             return DocumentJobDto.from_domain(job)
-        if job.state is DocumentJobState.CANCELLING:
-            cancelled = await self._jobs.transition(
-                job_id,
-                DocumentJobState.CANCELLING,
-                DocumentJobState.CANCELLED,
-            )
-            return DocumentJobDto.from_domain(cancelled)
+        cancelled = await self._cancel_if_requested(job_id, job)
+        if cancelled is not None:
+            return cancelled
         if job.state is DocumentJobState.NEEDS_ATTENTION:
             return DocumentJobDto.from_domain(job)
         last_event = None
@@ -62,19 +65,17 @@ class RunDocumentJob:
             current = await self._jobs.get(job_id)
             if current is None:
                 raise revision_error("JOB_NOT_FOUND", {"job_id": job_id})
-            if current.state is DocumentJobState.CANCELLING:
-                cancelled = await self._jobs.transition(
-                    job_id,
-                    DocumentJobState.CANCELLING,
-                    DocumentJobState.CANCELLED,
-                )
-                return DocumentJobDto.from_domain(cancelled)
+            cancelled = await self._cancel_if_requested(job_id, current)
+            if cancelled is not None:
+                return cancelled
             job = current
             if job.state is not stage.state:
                 job = await self._jobs.transition(job_id, job.state, stage.state)
             try:
                 result = await stage.execute(job_id)
-            except ApplicationError:
+            except ApplicationError as error:
+                if error.category is ErrorCategory.CANCELLED:
+                    return await self._confirm_cancellation(job_id)
                 await self._mark_failed(job_id, stage.state)
                 raise
             except Exception as error:
@@ -83,13 +84,9 @@ class RunDocumentJob:
             current = await self._jobs.get(job_id)
             if current is None:
                 raise revision_error("JOB_NOT_FOUND", {"job_id": job_id})
-            if current.state is DocumentJobState.CANCELLING:
-                cancelled = await self._jobs.transition(
-                    job_id,
-                    DocumentJobState.CANCELLING,
-                    DocumentJobState.CANCELLED,
-                )
-                return DocumentJobDto.from_domain(cancelled)
+            cancelled = await self._cancel_if_requested(job_id, current)
+            if cancelled is not None:
+                return cancelled
             if current.state is not stage.state:
                 raise revision_error("JOB_STATE_CONFLICT", {"job_id": job_id})
             job = current
@@ -126,6 +123,21 @@ class RunDocumentJob:
             DocumentJobState.COMPLETED,
         )
         return DocumentJobDto.from_domain(completed)
+
+    async def _cancel_if_requested(
+        self,
+        job_id: str,
+        job: DocumentJob,
+    ) -> DocumentJobDto | None:
+        requested = job.state is DocumentJobState.CANCELLING or (
+            self._cancellation is not None and self._cancellation.is_cancelled
+        )
+        if not requested:
+            return None
+        return await self._confirm_cancellation(job_id)
+
+    async def _confirm_cancellation(self, job_id: str) -> DocumentJobDto:
+        return await self._cancellations.confirm(job_id)
 
     @staticmethod
     def _start_index(state: DocumentJobState, last_event_stage: str | None) -> int:

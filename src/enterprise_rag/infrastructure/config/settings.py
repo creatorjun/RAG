@@ -38,6 +38,7 @@ class RuntimeSettings(_StrictModel):
     worker_start_timeout_seconds: int = Field(default=30, ge=5, le=300)
     worker_heartbeat_seconds: int = Field(default=5, ge=1, le=60)
     worker_missed_heartbeats: int = Field(default=3, ge=2, le=12)
+    cancellation_grace_seconds: int = Field(default=15, ge=5, le=120)
     model_download_reserve_bytes: int = Field(
         default=5 * 1024 * 1024 * 1024,
         ge=1024 * 1024 * 1024,

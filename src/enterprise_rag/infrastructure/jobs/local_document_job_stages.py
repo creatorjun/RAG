@@ -15,10 +15,17 @@ from enterprise_rag.application.dto.revision import (
     GeneratedDocumentWriteDto,
     SourceDocumentRecordDto,
 )
+from enterprise_rag.application.ports.cancellation import CancellationTokenPort
+from enterprise_rag.application.ports.claim_draft_generator import (
+    ClaimDraftGeneratorPort,
+)
 from enterprise_rag.application.ports.claim_ledger_repository import (
     ClaimLedgerRepositoryPort,
 )
-from enterprise_rag.application.ports.clock import ClockPort, IdGeneratorPort
+from enterprise_rag.application.ports.claim_relation_generator import (
+    ClaimRelationGeneratorPort,
+)
+from enterprise_rag.application.ports.document_workspace import DocumentWorkspacePort
 from enterprise_rag.application.ports.evidence_repository import EvidenceRepositoryPort
 from enterprise_rag.application.ports.final_document_repository import (
     FinalDocumentRepositoryPort,
@@ -28,6 +35,14 @@ from enterprise_rag.application.ports.job_definition_repository import (
     DocumentJobDefinitionRepositoryPort,
 )
 from enterprise_rag.application.ports.job_stage import DocumentJobStagePort
+from enterprise_rag.application.ports.long_document import (
+    LongDocumentChunkerPort,
+    TextDocumentCollectionPort,
+)
+from enterprise_rag.application.ports.task_definition_generator import (
+    TaskDefinitionGeneratorPort,
+)
+from enterprise_rag.application.ports.task_output_generator import TaskOutputGeneratorPort
 from enterprise_rag.application.ports.task_plan_repository import TaskPlanRepositoryPort
 from enterprise_rag.application.ports.task_result_repository import (
     TaskResultRepositoryPort,
@@ -59,45 +74,40 @@ from enterprise_rag.application.use_cases.validate_final_document import (
 from enterprise_rag.application.use_cases.validate_task_output import ValidateTaskOutput
 from enterprise_rag.domain.errors import ApplicationError, revision_error
 from enterprise_rag.domain.jobs import DocumentJobState
-from enterprise_rag.infrastructure.chunking.structure_aware_text_chunker import (
-    StructureAwareTextChunker,
-)
-from enterprise_rag.infrastructure.models.mlx_text_generator import MlxTextGenerator
-from enterprise_rag.infrastructure.models.structured_claim_draft_generator import (
-    StructuredClaimDraftGenerator,
-)
-from enterprise_rag.infrastructure.models.structured_claim_relation_generator import (
-    StructuredClaimRelationGenerator,
-)
-from enterprise_rag.infrastructure.models.structured_task_definition_generator import (
-    StructuredTaskDefinitionGenerator,
-)
-from enterprise_rag.infrastructure.models.structured_task_output_generator import (
-    StructuredTaskOutputGenerator,
-)
-from enterprise_rag.infrastructure.sources.before_text_source import BeforeTextDocumentSource
-from enterprise_rag.infrastructure.tokenization.conservative_utf8 import (
-    ConservativeUtf8TokenCounter,
-)
-from enterprise_rag.infrastructure.workspace.folder_revision_workspace import (
-    FolderRevisionWorkspace,
-)
-from enterprise_rag.infrastructure.workspace.folder_tree_comparator import (
-    FolderTreeComparator,
-)
 
 _PUBLISH_RESULT = "control/publish-result.json"
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 ModelFactory = Callable[[StoredDocumentJobDefinitionDto], TextGeneratorPort]
+ClaimDraftGeneratorFactory = Callable[
+    [TextGeneratorPort, int, str], ClaimDraftGeneratorPort
+]
+ClaimRelationGeneratorFactory = Callable[
+    [TextGeneratorPort, int, str], ClaimRelationGeneratorPort
+]
+TaskDefinitionGeneratorFactory = Callable[
+    [TextGeneratorPort, int, str], TaskDefinitionGeneratorPort
+]
+TaskOutputGeneratorFactory = Callable[
+    [TextGeneratorPort, int, str], TaskOutputGeneratorPort
+]
+SourceFactory = Callable[[Path], TextDocumentCollectionPort]
+WorkspaceFactory = Callable[[Path, Path], DocumentWorkspacePort]
+FileDigest = Callable[[Path], str]
 
 
 @dataclass(frozen=True, slots=True)
 class _Stage:
     state: DocumentJobState
     callback: Callable[[str], Awaitable[JobStageResultDto]]
+    cancellation: CancellationTokenPort | None = None
 
     async def execute(self, job_id: str) -> JobStageResultDto:
-        return await self.callback(job_id)
+        if self.cancellation is not None:
+            self.cancellation.raise_if_cancelled()
+        result = await self.callback(job_id)
+        if self.cancellation is not None:
+            self.cancellation.raise_if_cancelled()
+        return result
 
 
 @dataclass(slots=True)
@@ -120,12 +130,17 @@ class LocalDocumentJobStages:
         results: TaskResultRepositoryPort,
         finals: FinalDocumentRepositoryPort,
         chunking: ChunkingConfigDto,
-        text_max_file_bytes: int,
-        workspace_max_file_bytes: int,
-        reserved_model_tokens: int,
-        clock: ClockPort,
-        ids: IdGeneratorPort,
-        model_factory: ModelFactory | None = None,
+        *,
+        chunker: LongDocumentChunkerPort,
+        source_factory: SourceFactory,
+        workspace_factory: WorkspaceFactory,
+        model_factory: ModelFactory,
+        claim_draft_generator_factory: ClaimDraftGeneratorFactory,
+        claim_relation_generator_factory: ClaimRelationGeneratorFactory,
+        task_definition_generator_factory: TaskDefinitionGeneratorFactory,
+        task_output_generator_factory: TaskOutputGeneratorFactory,
+        file_digest: FileDigest,
+        cancellation: CancellationTokenPort | None = None,
     ) -> None:
         self._artifacts = artifacts
         self._definitions = definitions
@@ -135,26 +150,46 @@ class LocalDocumentJobStages:
         self._results = results
         self._finals = finals
         self._chunking = chunking
-        self._text_max_file_bytes = text_max_file_bytes
-        self._workspace_max_file_bytes = workspace_max_file_bytes
-        self._reserved_model_tokens = reserved_model_tokens
-        self._clock = clock
-        self._ids = ids
+        self._chunker = chunker
+        self._source_factory = source_factory
+        self._workspace_factory = workspace_factory
         self._model_factory = model_factory
+        self._claim_draft_generator_factory = claim_draft_generator_factory
+        self._claim_relation_generator_factory = claim_relation_generator_factory
+        self._task_definition_generator_factory = task_definition_generator_factory
+        self._task_output_generator_factory = task_output_generator_factory
+        self._file_digest = file_digest
+        self._cancellation = cancellation
         self._runtimes: dict[str, _Runtime] = {}
 
     def stages(self) -> tuple[DocumentJobStagePort, ...]:
         return (
-            _Stage(DocumentJobState.INSPECTING, self._inspect),
-            _Stage(DocumentJobState.SNAPSHOTTING, self._snapshot),
-            _Stage(DocumentJobState.EXTRACTING_EVIDENCE, self._extract_evidence),
-            _Stage(DocumentJobState.BUILDING_CLAIMS, self._build_claim_ledger),
-            _Stage(DocumentJobState.PLANNING, self._plan),
-            _Stage(DocumentJobState.RUNNING_TASKS, self._run_tasks),
-            _Stage(DocumentJobState.VALIDATING_TASKS, self._validate_tasks),
-            _Stage(DocumentJobState.ASSEMBLING, self._assemble),
-            _Stage(DocumentJobState.VALIDATING_FINAL, self._validate_final),
-            _Stage(DocumentJobState.PUBLISHING, self._publish),
+            _Stage(DocumentJobState.INSPECTING, self._inspect, self._cancellation),
+            _Stage(DocumentJobState.SNAPSHOTTING, self._snapshot, self._cancellation),
+            _Stage(
+                DocumentJobState.EXTRACTING_EVIDENCE,
+                self._extract_evidence,
+                self._cancellation,
+            ),
+            _Stage(
+                DocumentJobState.BUILDING_CLAIMS,
+                self._build_claim_ledger,
+                self._cancellation,
+            ),
+            _Stage(DocumentJobState.PLANNING, self._plan, self._cancellation),
+            _Stage(DocumentJobState.RUNNING_TASKS, self._run_tasks, self._cancellation),
+            _Stage(
+                DocumentJobState.VALIDATING_TASKS,
+                self._validate_tasks,
+                self._cancellation,
+            ),
+            _Stage(DocumentJobState.ASSEMBLING, self._assemble, self._cancellation),
+            _Stage(
+                DocumentJobState.VALIDATING_FINAL,
+                self._validate_final,
+                self._cancellation,
+            ),
+            _Stage(DocumentJobState.PUBLISHING, self._publish, self._cancellation),
         )
 
     async def _runtime(self, job_id: str) -> _Runtime:
@@ -165,20 +200,10 @@ class LocalDocumentJobStages:
         execution = definition.request.execution_settings
         if execution is None:
             raise revision_error("JOB_DEFINITION_INVALID", {"job_id": job_id})
-        generator = (
-            self._model_factory(definition)
-            if self._model_factory is not None
-            else MlxTextGenerator(
-                execution.model_id,
-                execution.model_revision,
-                execution.context_tokens,
-                self._reserved_model_tokens,
-                execution.offline_mode,
-            )
-        )
+        generator = self._model_factory(definition)
         output_budget = execution.max_output_tokens
         additional = execution.additional_system_prompt
-        result_writer = StructuredTaskOutputGenerator(
+        result_writer = self._task_output_generator_factory(
             generator, output_budget, additional
         )
         attempts = ExecuteTaskAttempt(
@@ -194,14 +219,20 @@ class LocalDocumentJobStages:
                 execution.max_task_attempts,
             ),
             extract_claims=ExtractClaimDrafts(
-                StructuredClaimDraftGenerator(generator, output_budget, additional)
+                self._claim_draft_generator_factory(
+                    generator, output_budget, additional
+                )
             ),
             build_claims=BuildReviewedClaimLedger(
-                StructuredClaimRelationGenerator(generator, output_budget, additional),
+                self._claim_relation_generator_factory(
+                    generator, output_budget, additional
+                ),
                 BuildClaimLedger(),
             ),
             plan_tasks=PlanDocumentTasks(
-                StructuredTaskDefinitionGenerator(generator, output_budget, additional),
+                self._task_definition_generator_factory(
+                    generator, output_budget, additional
+                ),
                 BuildTaskPlan(),
             ),
         )
@@ -248,7 +279,7 @@ class LocalDocumentJobStages:
         source = self._source(runtime.definition)
         integration_input = await InspectIntegrationSources(
             source,
-            StructureAwareTextChunker(ConservativeUtf8TokenCounter()),
+            self._chunker,
             self._chunking,
         ).execute(ProgressReporter())
         expected = await self._source_manifest(job_id, runtime.definition)
@@ -406,13 +437,9 @@ class LocalDocumentJobStages:
         if not candidate.quality.valid:
             raise revision_error("FINAL_QUALITY_GATE_FAILED", {"job_id": job_id})
         evidence = await self._evidence.load(job_id)
-        workspace = FolderRevisionWorkspace(
+        workspace = self._workspace_factory(
             Path(runtime.definition.request.source_root),
             Path(execution_settings.output_root),
-            FolderTreeComparator(),
-            self._clock,
-            self._ids,
-            self._workspace_max_file_bytes,
         )
         try:
             await workspace.prepare_run(job_id)
@@ -426,6 +453,14 @@ class LocalDocumentJobStages:
             evidence.items,
         )
         comparison = await workspace.compare_run(job_id)
+        run_root = Path(execution_settings.output_root) / "runs" / job_id
+        document_path = (
+            run_root
+            / "documents"
+            / runtime.definition.request.output_relative_path
+        )
+        comparison_markdown_path = run_root / "_reports/comparison.md"
+        synthesis_report_path = run_root / "_reports/synthesis.json"
         value: dict[str, object] = {
             "schema_version": 1,
             "job_id": job_id,
@@ -434,6 +469,11 @@ class LocalDocumentJobStages:
             "comparison_report_sha256": comparison.report_sha256,
             "file_count": len(comparison.files),
             "counts": comparison.counts,
+            "document_sha256": self._file_sha256(document_path),
+            "comparison_markdown_sha256": self._file_sha256(
+                comparison_markdown_path
+            ),
+            "synthesis_report_sha256": self._file_sha256(synthesis_report_path),
         }
         await self._write_or_verify_json(job_id, _PUBLISH_RESULT, value)
         return JobStageResultDto(
@@ -443,9 +483,15 @@ class LocalDocumentJobStages:
             "files",
         )
 
+    def _file_sha256(self, path: Path) -> str:
+        try:
+            return self._file_digest(path)
+        except OSError as error:
+            raise revision_error("FINAL_QUALITY_GATE_FAILED") from error
+
     async def _write_or_verify_output(
         self,
-        workspace: FolderRevisionWorkspace,
+        workspace: DocumentWorkspacePort,
         definition: StoredDocumentJobDefinitionDto,
         markdown: str,
         evidence_items: tuple[Any, ...],
@@ -514,13 +560,13 @@ class LocalDocumentJobStages:
                     "FINAL_QUALITY_GATE_FAILED", {"job_id": definition.job_id}
                 ) from error
 
-    def _source(self, definition: StoredDocumentJobDefinitionDto) -> BeforeTextDocumentSource:
-        return BeforeTextDocumentSource(
-            Path(definition.request.source_root), self._text_max_file_bytes
-        )
+    def _source(
+        self, definition: StoredDocumentJobDefinitionDto
+    ) -> TextDocumentCollectionPort:
+        return self._source_factory(Path(definition.request.source_root))
 
     async def _read_documents(
-        self, source: BeforeTextDocumentSource
+        self, source: TextDocumentCollectionPort
     ) -> tuple[TextDocumentDto, ...]:
         paths = await source.list_relative_paths()
         if not paths:

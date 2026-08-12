@@ -110,7 +110,7 @@ class SubprocessDocumentJobLauncher:
                 (
                     sys.executable,
                     "-m",
-                    "enterprise_rag.presentation.job_worker",
+                    "enterprise_rag.job_worker",
                     "--project-root",
                     str(self._project_root),
                     "--environment",

@@ -107,7 +107,7 @@ Job 생성은 백그라운드에서 모델 선택을 다시 검증하고, cache 
 
 ### 4.1 작업 제어와 요약
 
-- 새 Job 생성, 시작, 안전 취소, 재개
+- 새 Job 생성, 시작, 즉시 취소, 재개
 - Job ID, 입력 폴더, 결과명, 모델 ID·revision, 설정 fingerprint
 - 현재 상태, 전체 진행률, 시작·갱신 시각, 경과 시간
 - 문서·Evidence·Claim·Task·검증 완료/전체 건수
@@ -136,6 +136,10 @@ Job 생성은 백그라운드에서 모델 선택을 다시 검증하고, cache 
 - 마지막 정상 체크포인트와 재개 가능 단계
 - Claim/Evidence/source coverage, 충돌 노출, 실패한 품질 항목
 - 최종 문서·품질 보고서·before/after 비교 보고서 열기
+
+현재 결과 패널은 게시 상태, Task·Claim·Evidence coverage, 원본 수, 품질 오류 코드와
+추가·수정·삭제·동일 건수를 표시한다. 최종 문서, 품질 JSON, 비교 Markdown, 합성 JSON의 `열기`
+버튼은 Application adapter가 경계와 SHA-256을 재검증한 경로에만 활성화된다.
 
 이벤트 화면에는 원문, 전체 모델 응답과 비밀값을 표시하지 않는다.
 
@@ -169,8 +173,13 @@ Job 기본값이며 배포·보안 설정 YAML을 대체하지 않는다. Job �
 ## 7. 완료 알림
 
 완료 알림은 `COMPLETED` 상태만 대상으로 하며 최종 파일, 품질 보고서, run manifest와 비교
-보고서 커밋 뒤 정확히 한 번 발생한다. `NEEDS_ATTENTION`, `FAILED`, `CANCELLED`는 서로 다른
-알림 유형을 사용하고 성공으로 표시하지 않는다.
+보고서 커밋 뒤 한 번만 시도한다. `NEEDS_ATTENTION`, `FAILED`, `CANCELLED`에는 성공 알림을
+보내지 않는다.
+
+현재 완료 알림은 Job snapshot에서 활성화된 성공 알림을 구현한다. Worker와 GUI recovery가 동시에
+요청해도 publication fingerprint별 `CLAIMED` 영수증을 획득한 하나만 macOS 알림을 호출한다.
+`DELIVERED`, `FAILED`, 선점 직후 프로세스 종료로 전달 여부를 확정할 수 없는 `CLAIMED`를 화면에
+구분해 표시하며, 중복 방지를 위해 불확실 영수증은 자동 재전송하지 않는다.
 
 ## 8. 구현 순서
 
@@ -194,5 +203,9 @@ Worker 생존 상태는 Job별 runner token·PID·launch sequence와 5초 heartb
 안전한 오류 코드를 표시한다. OS 파일 lock이 실제 중복 실행 권한의 기준이고,
 `runner-state.json`은 GUI 관측과 감사 전용이다.
 
-남은 범위는 생성 호출 중 즉시 취소,
-결과·품질·비교 보고서 열기, exactly-once 완료 알림과 macOS packaging이다.
+`즉시 취소 요청`은 Job을 `CANCELLING`으로 바꾸고 검증된 Worker process group에 `SIGTERM`을
+전달한다. 화면에는 토큰 경계 중단, 정상 종료 유예 시간과 Worker 종료 확인 상태를 표시한다.
+MLX 생성은 다음 token chunk에서 중단하며, 유예 15초를 넘긴 Worker만 자기 watchdog으로
+강제 종료된다. 완료된 체크포인트는 재개 근거로 남고 미완성 생성 출력은 게시되지 않는다.
+
+남은 GUI 범위는 단일 instance 제어와 macOS application packaging이다.

@@ -165,6 +165,17 @@ class SettingsTest(unittest.TestCase):
         with self.assertRaises(ValidationError):
             Settings.model_validate(value)
 
+    def test_rejects_cancellation_grace_outside_safe_range(self) -> None:
+        for grace_seconds in (4, 121):
+            value = _valid_settings()
+            runtime = dict(value["runtime"])
+            runtime["cancellation_grace_seconds"] = grace_seconds
+            value["runtime"] = runtime
+            with self.subTest(grace_seconds=grace_seconds), self.assertRaises(
+                ValidationError
+            ):
+                Settings.model_validate(value)
+
 
 if __name__ == "__main__":
     unittest.main()

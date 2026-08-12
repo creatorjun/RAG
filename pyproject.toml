@@ -36,8 +36,8 @@ dev = [
 ]
 
 [project.scripts]
-rag = "enterprise_rag.presentation.cli:main"
-rag-gui = "enterprise_rag.presentation.gui.app:main"
+rag = "enterprise_rag.bootstrap:cli_main"
+rag-gui = "enterprise_rag.bootstrap:gui_main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }

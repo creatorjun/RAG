@@ -894,6 +894,54 @@ class CancellationToken(Protocol):
 - 취소는 실패 횟수에 포함하지 않는다.
 - 프로세스 강제 종료는 정상 취소 제한 시간을 초과한 경우에만 수행한다.
 
+현재 로컬 Job 구현은 다음 순서를 고정한다.
+
+1. `RequestDocumentJobCancellation`이 Job을 `CANCELLING`으로 원자 전이한다.
+2. 저장된 runner lease가 `RUNNING`이면 PID가 동일 번호의 독립 process group leader인지 검증하고
+   해당 그룹에만 `SIGTERM`을 전달한다. 검증 실패 시 다른 프로세스에 신호를 보내지 않는다.
+3. Worker의 signal guard가 thread-safe cancellation token을 설정하고 `cancellation_grace_seconds`
+   watchdog을 시작한다. 별도 확인 작업은 Job을 `CANCELLED`로 전이한다.
+4. `MlxTextGenerator`는 `stream_generate`의 각 토큰 조각 전후에 token을 검사한다. 취소된 부분 출력은
+   Task 결과나 게시 문서로 저장하지 않는다.
+5. 정상 반환 시 watchdog을 해제하고 runner lease를 `EXITED`로 닫는다. 유예를 넘기면 Worker 자신이
+   자기 process group에만 `SIGKILL`을 보내며, 완료된 write-once 체크포인트는 유지한다.
+
+`JOB_CANCELLED`는 `CANCELLED` 범주이며 실패나 재시도 횟수로 기록하지 않는다.
+프로세스 그룹 불일치는 `RUNNER_PROCESS_MISMATCH`, 신호 전달 실패는
+`RUNNER_CANCELLATION_FAILED`로 안전하게 노출한다.
+
+## 10.1 게시 결과와 완료 알림 계약
+
+```python
+class JobResultAvailability(StrEnum):
+    NOT_READY = "NOT_READY"
+    QUALITY_READY = "QUALITY_READY"
+    PUBLISHED = "PUBLISHED"
+
+class CompletionNotificationState(StrEnum):
+    NOT_READY = "NOT_READY"
+    DISABLED = "DISABLED"
+    READY = "READY"
+    CLAIMED = "CLAIMED"
+    DELIVERED = "DELIVERED"
+    FAILED = "FAILED"
+```
+
+`PUBLISHED` 결과는 다음을 모두 다시 검증한 뒤에만 반환한다.
+
+- Job definition의 output root·상대 경로와 실제 run 경계
+- 최종 문서 SHA-256과 `FinalQualityReportDto.document_sha256`
+- 비교 JSON SHA-256과 게시 체크포인트 digest
+- 비교 건수 합계와 게시 파일 수
+- 새 게시물의 비교 Markdown·합성 JSON SHA-256
+- run 전체의 link·path escape 부재
+
+알림 정책은 Job 생성 시 저장된 `notify_on_completion`만 사용한다. `COMPLETED`와 `PUBLISHED`,
+최종 품질 통과를 확인한 뒤 게시 fingerprint에 대해 `CLAIMED` 영수증을 원자 생성한 프로세스만
+macOS 알림을 호출한다. 다른 Worker나 GUI는 같은 영수증을 반환해 중복 호출하지 않는다.
+성공은 `DELIVERED`, 운영체제 호출 실패는 안전한 오류 코드와 `FAILED`로 기록한다. 프로세스가
+선점 직후 종료된 `CLAIMED`는 중복 방지를 위해 자동 재전송하지 않고 전달 불확실로 표시한다.
+
 ## 11. 예외 분류
 
 ```python

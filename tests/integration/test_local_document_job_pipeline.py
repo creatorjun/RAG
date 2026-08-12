@@ -8,15 +8,35 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from enterprise_rag.application.dto.job_dashboard import CheckpointStatus
+from enterprise_rag.application.dto.job_result import (
+    CompletionNotificationState,
+    JobResultAvailability,
+)
 from enterprise_rag.application.dto.jobs import (
     CreateDocumentJobDto,
     JobExecutionSettingsDto,
 )
 from enterprise_rag.application.dto.long_document import ChunkingConfigDto
+from enterprise_rag.application.use_cases.get_document_job_result import (
+    GetDocumentJobResult,
+)
+from enterprise_rag.application.use_cases.notify_document_job_completion import (
+    NotifyDocumentJobCompletion,
+)
 from enterprise_rag.application.use_cases.run_document_job import RunDocumentJob
+from enterprise_rag.domain.errors import ApplicationError
 from enterprise_rag.domain.jobs import DocumentJob, DocumentJobState
+from enterprise_rag.infrastructure.chunking.structure_aware_text_chunker import (
+    StructureAwareTextChunker,
+)
 from enterprise_rag.infrastructure.jobs.filesystem_claim_ledger_repository import (
     FilesystemClaimLedgerRepository,
+)
+from enterprise_rag.infrastructure.jobs.filesystem_completion_notification_repository import (
+    FilesystemCompletionNotificationRepository,
+)
+from enterprise_rag.infrastructure.jobs.filesystem_document_job_result_reader import (
+    FilesystemDocumentJobResultReader,
 )
 from enterprise_rag.infrastructure.jobs.filesystem_evidence_repository import (
     FilesystemEvidenceRepository,
@@ -42,8 +62,31 @@ from enterprise_rag.infrastructure.jobs.filesystem_task_result_repository import
 from enterprise_rag.infrastructure.jobs.local_document_job_stages import (
     LocalDocumentJobStages,
 )
+from enterprise_rag.infrastructure.models.structured_claim_draft_generator import (
+    StructuredClaimDraftGenerator,
+)
+from enterprise_rag.infrastructure.models.structured_claim_relation_generator import (
+    StructuredClaimRelationGenerator,
+)
+from enterprise_rag.infrastructure.models.structured_task_definition_generator import (
+    StructuredTaskDefinitionGenerator,
+)
+from enterprise_rag.infrastructure.models.structured_task_output_generator import (
+    StructuredTaskOutputGenerator,
+)
 from enterprise_rag.infrastructure.persistence.sqlite_document_job_repository import (
     SqliteDocumentJobRepository,
+)
+from enterprise_rag.infrastructure.sources.before_text_source import BeforeTextDocumentSource
+from enterprise_rag.infrastructure.tokenization.conservative_utf8 import (
+    ConservativeUtf8TokenCounter,
+)
+from enterprise_rag.infrastructure.workspace.file_io import sha256_file
+from enterprise_rag.infrastructure.workspace.folder_revision_workspace import (
+    FolderRevisionWorkspace,
+)
+from enterprise_rag.infrastructure.workspace.folder_tree_comparator import (
+    FolderTreeComparator,
 )
 
 
@@ -147,6 +190,14 @@ class _StructuredGenerator:
         return json.loads(prompt[start:end])
 
 
+class _Notifier:
+    def __init__(self) -> None:
+        self.messages: list[tuple[str, str]] = []
+
+    async def send(self, title: str, message: str) -> None:
+        self.messages.append((title, message))
+
+
 class LocalDocumentJobPipelineTest(unittest.TestCase):
     def test_runs_real_stage_adapters_and_publishes_only_after_quality_gate(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -178,7 +229,7 @@ class LocalDocumentJobPipelineTest(unittest.TestCase):
                 "b" * 64,
                 2,
                 True,
-                False,
+                True,
             )
             asyncio.run(jobs.create(job))
             asyncio.run(
@@ -204,12 +255,22 @@ class LocalDocumentJobPipelineTest(unittest.TestCase):
                 ChunkingConfigDto(
                     "conservative-utf8-bytes-v1", "1", 800, 1_200, 80, 0.1
                 ),
-                1_000_000,
-                1_000_000,
-                512,
-                clock,
-                _Ids(),
+                chunker=StructureAwareTextChunker(ConservativeUtf8TokenCounter()),
+                source_factory=lambda path: BeforeTextDocumentSource(path, 1_000_000),
+                workspace_factory=lambda before, after: FolderRevisionWorkspace(
+                    before,
+                    after,
+                    FolderTreeComparator(),
+                    clock,
+                    _Ids(),
+                    1_000_000,
+                ),
                 model_factory=lambda _: _StructuredGenerator(),
+                claim_draft_generator_factory=StructuredClaimDraftGenerator,
+                claim_relation_generator_factory=StructuredClaimRelationGenerator,
+                task_definition_generator_factory=StructuredTaskDefinitionGenerator,
+                task_output_generator_factory=StructuredTaskOutputGenerator,
+                file_digest=sha256_file,
             ).stages()
 
             completed = asyncio.run(
@@ -241,6 +302,44 @@ class LocalDocumentJobPipelineTest(unittest.TestCase):
                 CheckpointStatus.SAVED,
             )
             self.assertFalse(inspected["published_run"].resumable)
+            definitions = FilesystemDocumentJobDefinitionRepository(artifacts)
+            reader = FilesystemDocumentJobResultReader(
+                root / "var",
+                artifacts,
+                definitions,
+                finals,
+            )
+            result = asyncio.run(
+                GetDocumentJobResult(jobs, reader).execute(job.job_id)
+            )
+            self.assertEqual(result.availability, JobResultAvailability.PUBLISHED)
+            self.assertEqual(result.document_path, str(published / "documents/generated.md"))
+            self.assertTrue(result.quality.valid)
+            self.assertEqual(result.comparison_counts.total, 2)
+
+            receipts = FilesystemCompletionNotificationRepository(root / "var")
+            notifier = _Notifier()
+            notifications = NotifyDocumentJobCompletion(
+                jobs,
+                reader,
+                receipts,
+                notifier,
+                clock,
+            )
+            first = asyncio.run(notifications.execute(job.job_id))
+            repeated = asyncio.run(notifications.execute(job.job_id))
+            self.assertEqual(first.state, CompletionNotificationState.DELIVERED)
+            self.assertEqual(repeated, first)
+            self.assertEqual(len(notifier.messages), 1)
+            self.assertTrue(
+                (root / "var/jobs" / job.job_id / "control/completion-notification.json").is_file()
+            )
+
+            comparison_path = published / "_reports/comparison.json"
+            comparison_path.write_text("{}\n", encoding="utf-8")
+            with self.assertRaises(ApplicationError) as captured:
+                asyncio.run(GetDocumentJobResult(jobs, reader).execute(job.job_id))
+            self.assertEqual(captured.exception.code, "JOB_RESULT_INVALID")
 
 
 if __name__ == "__main__":

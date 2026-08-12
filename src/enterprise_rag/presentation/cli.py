@@ -3,10 +3,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import importlib.util
 import json
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import asdict
 from pathlib import Path
 
@@ -18,11 +17,9 @@ from enterprise_rag.application.dto.revision import (
     FolderComparisonDto,
     RevisionRunDto,
 )
-from enterprise_rag.bootstrap import (
+from enterprise_rag.application.runtime import (
     Application,
     JobApplication,
-    build_application,
-    build_job_application,
 )
 from enterprise_rag.domain.errors import ApplicationError
 
@@ -156,20 +153,20 @@ def _print_integration_progress(value: IntegrationProgress) -> None:
 
 async def _execute(application: Application, args: argparse.Namespace) -> dict[str, object]:
     if args.command == "doctor":
-        settings = application.configuration.settings
+        diagnostics = application.diagnostics
         return {
             "status": "ok",
-            "schema_version": settings.schema_version,
-            "environment": settings.environment,
-            "web_enabled": settings.web.enabled,
-            "operating_context_tokens": settings.models.llm.context_tokens,
-            "chunk_max_tokens": settings.chunking.max_tokens,
-            "token_counter": settings.chunking.tokenizer_id,
-            "model_id": settings.models.llm.model_id,
-            "model_revision": settings.models.llm.revision,
-            "mlx_lm_available": importlib.util.find_spec("mlx_lm") is not None,
-            "before_root_readable": application.configuration.paths.before_root.is_dir(),
-            "after_root_available": application.configuration.paths.after_root.is_dir(),
+            "schema_version": diagnostics.schema_version,
+            "environment": diagnostics.environment,
+            "web_enabled": diagnostics.web_enabled,
+            "operating_context_tokens": diagnostics.operating_context_tokens,
+            "chunk_max_tokens": diagnostics.chunk_max_tokens,
+            "token_counter": diagnostics.token_counter,
+            "model_id": diagnostics.model_id,
+            "model_revision": diagnostics.model_revision,
+            "mlx_lm_available": diagnostics.mlx_lm_available,
+            "before_root_readable": diagnostics.before_root_readable,
+            "after_root_available": diagnostics.after_root_available,
         }
     if args.command == "document":
         if args.document_command == "plan":
@@ -237,14 +234,24 @@ async def _execute_job(
     }
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+ApplicationFactory = Callable[[Path, str | None], Application]
+JobApplicationFactory = Callable[[Path, str | None], JobApplication]
+
+
+def main(
+    application_factory: ApplicationFactory,
+    job_application_factory: JobApplicationFactory,
+    argv: Sequence[str] | None = None,
+) -> int:
     args = _build_parser().parse_args(argv)
     try:
         if args.command == "job":
-            with build_job_application(args.project_root, args.environment) as job_application:
+            with job_application_factory(
+                args.project_root, args.environment
+            ) as job_application:
                 result = asyncio.run(_execute_job(job_application, args))
         else:
-            with build_application(args.project_root, args.environment) as application:
+            with application_factory(args.project_root, args.environment) as application:
                 result = asyncio.run(_execute(application, args))
     except ApplicationError as error:
         payload = {

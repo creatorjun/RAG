@@ -2,12 +2,21 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
-from dataclasses import dataclass
 from pathlib import Path
 
 from enterprise_rag.application.dto.desktop_settings import DesktopSettingsDto
+from enterprise_rag.application.dto.jobs import StoredDocumentJobDefinitionDto
 from enterprise_rag.application.dto.long_document import ChunkingConfigDto
+from enterprise_rag.application.ports.text_generator import TextGeneratorPort
+from enterprise_rag.application.runtime import (
+    Application,
+    DesktopRuntimeDto,
+    JobApplication,
+    JobWorkerApplication,
+    RuntimeDiagnosticsDto,
+)
 from enterprise_rag.application.use_cases.build_evidence_bundle import BuildEvidenceBundle
 from enterprise_rag.application.use_cases.compare_revision_run import CompareRevisionRun
 from enterprise_rag.application.use_cases.create_configured_document_job import (
@@ -15,6 +24,9 @@ from enterprise_rag.application.use_cases.create_configured_document_job import 
 )
 from enterprise_rag.application.use_cases.create_document_job import CreateDocumentJob
 from enterprise_rag.application.use_cases.finalize_revision_run import FinalizeRevisionRun
+from enterprise_rag.application.use_cases.get_document_job_result import (
+    GetDocumentJobResult,
+)
 from enterprise_rag.application.use_cases.get_job_dashboard import GetJobDashboard
 from enterprise_rag.application.use_cases.inspect_integration_sources import (
     InspectIntegrationSources,
@@ -25,6 +37,7 @@ from enterprise_rag.application.use_cases.manage_desktop_settings import (
     UpdateDesktopSettings,
 )
 from enterprise_rag.application.use_cases.manage_document_jobs import (
+    ConfirmDocumentJobCancellation,
     GetDocumentJob,
     ListDocumentJobEvents,
     ListDocumentJobs,
@@ -39,6 +52,10 @@ from enterprise_rag.application.use_cases.model_download import (
     CancelModelDownload,
     DownloadModel,
 )
+from enterprise_rag.application.use_cases.notify_document_job_completion import (
+    GetCompletionNotificationStatus,
+    NotifyDocumentJobCompletion,
+)
 from enterprise_rag.application.use_cases.plan_long_document import PlanLongDocument
 from enterprise_rag.application.use_cases.prepare_revision_run import PrepareRevisionRun
 from enterprise_rag.application.use_cases.run_document_job import RunDocumentJob
@@ -51,9 +68,15 @@ from enterprise_rag.infrastructure.clock.system import SystemClock, UuidIdGenera
 from enterprise_rag.infrastructure.config.filesystem_desktop_settings_repository import (
     FilesystemDesktopSettingsRepository,
 )
-from enterprise_rag.infrastructure.config.settings import LoadedSettings, SettingsLoader
+from enterprise_rag.infrastructure.config.settings import SettingsLoader
 from enterprise_rag.infrastructure.jobs.filesystem_claim_ledger_repository import (
     FilesystemClaimLedgerRepository,
+)
+from enterprise_rag.infrastructure.jobs.filesystem_completion_notification_repository import (
+    FilesystemCompletionNotificationRepository,
+)
+from enterprise_rag.infrastructure.jobs.filesystem_document_job_result_reader import (
+    FilesystemDocumentJobResultReader,
 )
 from enterprise_rag.infrastructure.jobs.filesystem_evidence_repository import (
     FilesystemEvidenceRepository,
@@ -82,9 +105,16 @@ from enterprise_rag.infrastructure.jobs.filesystem_task_result_repository import
 from enterprise_rag.infrastructure.jobs.local_document_job_stages import (
     LocalDocumentJobStages,
 )
+from enterprise_rag.infrastructure.jobs.posix_runner_cancellation import (
+    PosixRunnerCancellation,
+)
 from enterprise_rag.infrastructure.jobs.subprocess_document_job_launcher import (
     SubprocessDocumentJobLauncher,
 )
+from enterprise_rag.infrastructure.jobs.thread_cancellation import (
+    ThreadCancellationToken,
+)
+from enterprise_rag.infrastructure.jobs.worker_termination import WorkerTerminationGuard
 from enterprise_rag.infrastructure.models.huggingface_model_catalog import (
     HuggingFaceModelCatalog,
 )
@@ -92,6 +122,21 @@ from enterprise_rag.infrastructure.models.huggingface_model_downloader import (
     HuggingFaceModelDownloader,
 )
 from enterprise_rag.infrastructure.models.mlx_text_generator import MlxTextGenerator
+from enterprise_rag.infrastructure.models.structured_claim_draft_generator import (
+    StructuredClaimDraftGenerator,
+)
+from enterprise_rag.infrastructure.models.structured_claim_relation_generator import (
+    StructuredClaimRelationGenerator,
+)
+from enterprise_rag.infrastructure.models.structured_task_definition_generator import (
+    StructuredTaskDefinitionGenerator,
+)
+from enterprise_rag.infrastructure.models.structured_task_output_generator import (
+    StructuredTaskOutputGenerator,
+)
+from enterprise_rag.infrastructure.notifications.macos_system_notifier import (
+    MacOsSystemNotifier,
+)
 from enterprise_rag.infrastructure.persistence.sqlite_document_job_repository import (
     SqliteDocumentJobRepository,
 )
@@ -102,76 +147,11 @@ from enterprise_rag.infrastructure.sources.before_text_source import BeforeTextD
 from enterprise_rag.infrastructure.tokenization.conservative_utf8 import (
     ConservativeUtf8TokenCounter,
 )
+from enterprise_rag.infrastructure.workspace.file_io import sha256_file
 from enterprise_rag.infrastructure.workspace.folder_revision_workspace import (
     FolderRevisionWorkspace,
 )
 from enterprise_rag.infrastructure.workspace.folder_tree_comparator import FolderTreeComparator
-
-
-@dataclass(frozen=True, slots=True)
-class Application:
-    configuration: LoadedSettings
-    prepare_revision_run: PrepareRevisionRun
-    compare_revision_run: CompareRevisionRun
-    finalize_revision_run: FinalizeRevisionRun
-    plan_long_document: PlanLongDocument
-    integrate_documents: IntegrateDocuments
-
-    def close(self) -> None:
-        return None
-
-    def __enter__(self) -> Application:
-        return self
-
-    def __exit__(self, exception_type: object, exception: object, traceback: object) -> None:
-        self.close()
-
-
-@dataclass(frozen=True, slots=True)
-class JobApplication:
-    configuration: LoadedSettings
-    create_document_job: CreateDocumentJob
-    create_configured_document_job: CreateConfiguredDocumentJob
-    get_document_job: GetDocumentJob
-    list_document_jobs: ListDocumentJobs
-    list_document_job_events: ListDocumentJobEvents
-    request_document_job_cancellation: RequestDocumentJobCancellation
-    get_desktop_settings: GetDesktopSettings
-    update_desktop_settings: UpdateDesktopSettings
-    browse_local_models: BrowseLocalModels
-    search_huggingface_models: SearchHuggingFaceModels
-    inspect_model_selection: InspectModelSelection
-    download_model: DownloadModel
-    cancel_model_download: CancelModelDownload
-    get_job_dashboard: GetJobDashboard
-    start_document_job: StartDocumentJob
-
-    def close(self) -> None:
-        return None
-
-    def __enter__(self) -> JobApplication:
-        return self
-
-    def __exit__(self, exception_type: object, exception: object, traceback: object) -> None:
-        self.close()
-
-
-@dataclass(frozen=True, slots=True)
-class JobWorkerApplication:
-    configuration: LoadedSettings
-    run_document_job: RunDocumentJob
-    runner_leases: FilesystemRunnerLeaseRepository
-    clock: SystemClock
-    heartbeat_seconds: int
-
-    def close(self) -> None:
-        return None
-
-    def __enter__(self) -> JobWorkerApplication:
-        return self
-
-    def __exit__(self, exception_type: object, exception: object, traceback: object) -> None:
-        self.close()
 
 
 def build_application(project_root: Path, environment: str | None = None) -> Application:
@@ -246,7 +226,19 @@ def build_application(project_root: Path, environment: str | None = None) -> App
         separator_tokens=settings.synthesis.batch_separator_tokens,
     )
     return Application(
-        configuration=configuration,
+        diagnostics=RuntimeDiagnosticsDto(
+            schema_version=settings.schema_version,
+            environment=settings.environment,
+            web_enabled=settings.web.enabled,
+            operating_context_tokens=settings.models.llm.context_tokens,
+            chunk_max_tokens=settings.chunking.max_tokens,
+            token_counter=settings.chunking.tokenizer_id,
+            model_id=settings.models.llm.model_id,
+            model_revision=settings.models.llm.revision,
+            mlx_lm_available=importlib.util.find_spec("mlx_lm") is not None,
+            before_root_readable=configuration.paths.before_root.is_dir(),
+            after_root_available=configuration.paths.after_root.is_dir(),
+        ),
         prepare_revision_run=PrepareRevisionRun(workspace),
         compare_revision_run=CompareRevisionRun(workspace),
         finalize_revision_run=FinalizeRevisionRun(workspace),
@@ -300,6 +292,23 @@ def build_job_application(
     plans = FilesystemTaskPlanRepository(artifacts)
     results = FilesystemTaskResultRepository(artifacts)
     finals = FilesystemFinalDocumentRepository(artifacts)
+    definitions = FilesystemDocumentJobDefinitionRepository(artifacts)
+    result_reader = FilesystemDocumentJobResultReader(
+        configuration.paths.var_root,
+        artifacts,
+        definitions,
+        finals,
+    )
+    notification_receipts = FilesystemCompletionNotificationRepository(
+        configuration.paths.var_root
+    )
+    notify_completion = NotifyDocumentJobCompletion(
+        repository,
+        result_reader,
+        notification_receipts,
+        MacOsSystemNotifier(),
+        clock,
+    )
     checkpoint_inspector = FilesystemJobCheckpointInspector(
         artifacts,
         evidence,
@@ -311,7 +320,10 @@ def build_job_application(
     runner_leases = FilesystemRunnerLeaseRepository(configuration.paths.var_root)
     ids = UuidIdGenerator()
     return JobApplication(
-        configuration=configuration,
+        runtime=DesktopRuntimeDto(
+            checkpoint_root=str(configuration.paths.var_root / "jobs"),
+            cancellation_grace_seconds=settings.runtime.cancellation_grace_seconds,
+        ),
         create_document_job=create_job,
         create_configured_document_job=CreateConfiguredDocumentJob(
             desktop_repository,
@@ -322,7 +334,10 @@ def build_job_application(
         get_document_job=GetDocumentJob(repository),
         list_document_jobs=ListDocumentJobs(repository),
         list_document_job_events=ListDocumentJobEvents(repository),
-        request_document_job_cancellation=RequestDocumentJobCancellation(repository),
+        request_document_job_cancellation=RequestDocumentJobCancellation(
+            repository,
+            PosixRunnerCancellation(runner_leases),
+        ),
         get_desktop_settings=GetDesktopSettings(desktop_repository),
         update_desktop_settings=UpdateDesktopSettings(desktop_repository),
         browse_local_models=BrowseLocalModels(model_catalog),
@@ -340,6 +355,13 @@ def build_job_application(
             settings.runtime.worker_heartbeat_seconds,
             settings.runtime.worker_missed_heartbeats,
         ),
+        get_document_job_result=GetDocumentJobResult(repository, result_reader),
+        get_completion_notification_status=GetCompletionNotificationStatus(
+            repository,
+            result_reader,
+            notification_receipts,
+        ),
+        notify_document_job_completion=notify_completion,
         start_document_job=StartDocumentJob(
             repository,
             SubprocessDocumentJobLauncher(
@@ -369,10 +391,44 @@ def build_job_worker_application(
     plans = FilesystemTaskPlanRepository(artifacts)
     results = FilesystemTaskResultRepository(artifacts)
     finals = FilesystemFinalDocumentRepository(artifacts)
+    definitions = FilesystemDocumentJobDefinitionRepository(artifacts)
     runner_leases = FilesystemRunnerLeaseRepository(configuration.paths.var_root)
+    cancellation = ThreadCancellationToken()
+    result_reader = FilesystemDocumentJobResultReader(
+        configuration.paths.var_root,
+        artifacts,
+        definitions,
+        finals,
+    )
+    notification_receipts = FilesystemCompletionNotificationRepository(
+        configuration.paths.var_root
+    )
+    notify_completion = NotifyDocumentJobCompletion(
+        repository,
+        result_reader,
+        notification_receipts,
+        MacOsSystemNotifier(),
+        clock,
+    )
+
+    def model_factory(
+        definition: StoredDocumentJobDefinitionDto,
+    ) -> TextGeneratorPort:
+        execution = definition.request.execution_settings
+        if execution is None:
+            raise ValueError("document job execution settings are required")
+        return MlxTextGenerator(
+            execution.model_id,
+            execution.model_revision,
+            execution.context_tokens,
+            settings.models.llm.reserved_tokens,
+            execution.offline_mode,
+            cancellation,
+        )
+
     stages = LocalDocumentJobStages(
         artifacts=artifacts,
-        definitions=FilesystemDocumentJobDefinitionRepository(artifacts),
+        definitions=definitions,
         evidence=evidence,
         claims=claims,
         plans=plans,
@@ -386,16 +442,54 @@ def build_job_worker_application(
             minimum_tokens=settings.chunking.minimum_tokens,
             overlap_ratio=settings.chunking.overlap_ratio,
         ),
-        text_max_file_bytes=settings.sources.text_max_file_bytes,
-        workspace_max_file_bytes=settings.sources.max_file_bytes,
-        reserved_model_tokens=settings.models.llm.reserved_tokens,
-        clock=clock,
-        ids=ids,
+        chunker=StructureAwareTextChunker(ConservativeUtf8TokenCounter()),
+        source_factory=lambda root: BeforeTextDocumentSource(
+            root,
+            settings.sources.text_max_file_bytes,
+        ),
+        workspace_factory=lambda before, after: FolderRevisionWorkspace(
+            before,
+            after,
+            FolderTreeComparator(),
+            clock,
+            ids,
+            settings.sources.max_file_bytes,
+        ),
+        model_factory=model_factory,
+        claim_draft_generator_factory=StructuredClaimDraftGenerator,
+        claim_relation_generator_factory=StructuredClaimRelationGenerator,
+        task_definition_generator_factory=StructuredTaskDefinitionGenerator,
+        task_output_generator_factory=StructuredTaskOutputGenerator,
+        file_digest=sha256_file,
+        cancellation=cancellation,
     ).stages()
     return JobWorkerApplication(
-        configuration,
-        RunDocumentJob(repository, repository, stages),
-        runner_leases,
-        clock,
-        settings.runtime.worker_heartbeat_seconds,
+        run_document_job=RunDocumentJob(repository, repository, stages, cancellation),
+        runner_leases=runner_leases,
+        clock=clock,
+        heartbeat_seconds=settings.runtime.worker_heartbeat_seconds,
+        termination=WorkerTerminationGuard(
+            cancellation,
+            settings.runtime.cancellation_grace_seconds,
+        ),
+        confirm_document_job_cancellation=ConfirmDocumentJobCancellation(repository),
+        notify_document_job_completion=notify_completion,
     )
+
+
+def cli_main(argv: list[str] | None = None) -> int:
+    from enterprise_rag.presentation.cli import main
+
+    return main(build_application, build_job_application, argv)
+
+
+def gui_main(argv: list[str] | None = None) -> int:
+    from enterprise_rag.presentation.gui.app import main
+
+    return main(build_job_application, argv)
+
+
+def job_worker_main(argv: list[str] | None = None) -> int:
+    from enterprise_rag.presentation.job_worker import main
+
+    return main(build_job_worker_application, argv)

@@ -5,6 +5,10 @@ from uuid import uuid4
 
 from enterprise_rag.application.dto.desktop_settings import DesktopSettingsDto
 from enterprise_rag.application.dto.job_dashboard import JobDashboardDto
+from enterprise_rag.application.dto.job_result import (
+    CompletionNotificationDto,
+    DocumentJobResultDto,
+)
 from enterprise_rag.application.dto.jobs import DocumentJobDto
 from enterprise_rag.application.dto.model_catalog import (
     ModelCatalogDto,
@@ -13,7 +17,7 @@ from enterprise_rag.application.dto.model_catalog import (
 from enterprise_rag.application.ports.model_download import (
     ModelDownloadProgressCallback,
 )
-from enterprise_rag.bootstrap import JobApplication
+from enterprise_rag.application.runtime import JobApplication
 
 
 class DesktopViewModel:
@@ -22,7 +26,11 @@ class DesktopViewModel:
 
     @property
     def checkpoint_root(self) -> str:
-        return str(self._application.configuration.paths.var_root / "jobs")
+        return self._application.runtime.checkpoint_root
+
+    @property
+    def cancellation_grace_seconds(self) -> int:
+        return self._application.runtime.cancellation_grace_seconds
 
     def load_settings(self) -> DesktopSettingsDto:
         return asyncio.run(self._application.get_desktop_settings.execute())
@@ -97,6 +105,22 @@ class DesktopViewModel:
 
     def dashboard(self, job_id: str) -> JobDashboardDto:
         return asyncio.run(self._application.get_job_dashboard.execute(job_id))
+
+    def job_result(self, job_id: str) -> DocumentJobResultDto:
+        return asyncio.run(self._application.get_document_job_result.execute(job_id))
+
+    def completion_notification_status(
+        self,
+        job_id: str,
+    ) -> CompletionNotificationDto:
+        return asyncio.run(
+            self._application.get_completion_notification_status.execute(job_id)
+        )
+
+    def notify_completion(self, job_id: str) -> CompletionNotificationDto:
+        return asyncio.run(
+            self._application.notify_document_job_completion.execute(job_id)
+        )
 
     def start_job(self, job_id: str) -> int:
         launched = asyncio.run(self._application.start_document_job.execute(job_id))

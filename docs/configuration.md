@@ -270,6 +270,8 @@ backup:
 - `max_parallel_llm_jobs`는 대상 장비에서 1만 허용한다.
 - `worker_heartbeat_seconds * worker_missed_heartbeats`는
   `worker_start_timeout_seconds`보다 작아야 한다. 현재 기본값은 15초와 30초다.
+- `cancellation_grace_seconds`는 5~120초이며 기본값은 15초다. 이 시간 동안 토큰 경계 취소와
+  체크포인트 정리를 기다리고, 초과한 Job Worker만 강제 종료한다.
 - 모델 다운로드는 dry-run의 미캐시 파일 합계에 `model_download_reserve_bytes`를 더한 공간을
   요구한다. 안전 여유는 1GiB 미만으로 설정할 수 없고 기본값은 5GiB다.
 - `critical < pressure < recovery`를 만족해야 한다.

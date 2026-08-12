@@ -2,8 +2,12 @@ from __future__ import annotations
 
 from enterprise_rag.application.dto.jobs import DocumentJobDto
 from enterprise_rag.application.dto.progress import ProgressEventDto
+from enterprise_rag.application.ports.cancellation import RunnerCancellationPort
 from enterprise_rag.application.ports.job_repository import DocumentJobRepositoryPort
 from enterprise_rag.application.ports.progress_events import ProgressEventPublisherPort
+from enterprise_rag.application.services.document_job_cancellation import (
+    DocumentJobCancellationService,
+)
 from enterprise_rag.domain.errors import revision_error
 from enterprise_rag.domain.jobs import DocumentJobState
 
@@ -45,18 +49,38 @@ class ListDocumentJobEvents:
 
 
 class RequestDocumentJobCancellation:
-    def __init__(self, jobs: DocumentJobRepositoryPort) -> None:
+    def __init__(
+        self,
+        jobs: DocumentJobRepositoryPort,
+        runners: RunnerCancellationPort | None = None,
+    ) -> None:
         self._jobs = jobs
+        self._runners = runners
+        self._cancellations = DocumentJobCancellationService(jobs)
 
     async def execute(self, job_id: str) -> DocumentJobDto:
         job = await self._jobs.get(job_id)
         if job is None:
             raise revision_error("JOB_NOT_FOUND", {"job_id": job_id})
-        if job.state.terminal or job.state is DocumentJobState.CANCELLING:
+        if job.state.terminal:
             return DocumentJobDto.from_domain(job)
-        cancelling = await self._jobs.transition(
-            job_id,
-            job.state,
-            DocumentJobState.CANCELLING,
-        )
-        return DocumentJobDto.from_domain(cancelling)
+        cancelling = job
+        if job.state is not DocumentJobState.CANCELLING:
+            cancelling = await self._jobs.transition(
+                job_id,
+                job.state,
+                DocumentJobState.CANCELLING,
+            )
+        if self._runners is None:
+            return DocumentJobDto.from_domain(cancelling)
+        if await self._runners.request(job_id):
+            return DocumentJobDto.from_domain(cancelling)
+        return await self._cancellations.confirm(job_id)
+
+
+class ConfirmDocumentJobCancellation:
+    def __init__(self, jobs: DocumentJobRepositoryPort) -> None:
+        self._cancellations = DocumentJobCancellationService(jobs)
+
+    async def execute(self, job_id: str) -> DocumentJobDto:
+        return await self._cancellations.confirm(job_id)

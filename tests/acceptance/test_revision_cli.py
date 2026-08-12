@@ -15,6 +15,7 @@ from enterprise_rag.application.dto.revision import (
     FolderComparisonDto,
     RevisionRunDto,
 )
+from enterprise_rag.bootstrap import build_application, build_job_application
 from enterprise_rag.domain.revision import RevisionRunState
 from enterprise_rag.presentation.cli import main
 
@@ -29,6 +30,8 @@ class RevisionCliTest(unittest.TestCase):
         self.after_root = self.project_root / "data" / "after"
         self.before_root.mkdir(parents=True)
         self.after_root.mkdir(parents=True)
+        self.application_factory = build_application
+        self.job_application_factory = build_job_application
 
     def tearDown(self) -> None:
         self._temporary.cleanup()
@@ -38,7 +41,11 @@ class RevisionCliTest(unittest.TestCase):
         stderr = io.StringIO()
         args = ["--project-root", str(self.project_root), *arguments]
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-            exit_code = main(args)
+            exit_code = main(
+                self.application_factory,
+                self.job_application_factory,
+                args,
+            )
         output = stdout.getvalue().strip()
         error = stderr.getvalue().strip()
         payload = json.loads(output or error)
@@ -169,8 +176,9 @@ class RevisionCliTest(unittest.TestCase):
         application = MagicMock()
         application.__enter__.return_value = application
         application.integrate_documents.execute = AsyncMock(return_value=result)
-        with patch(
-            "enterprise_rag.presentation.cli.build_application",
+        with patch.object(
+            self,
+            "application_factory",
             return_value=application,
         ):
             exit_code, payload, error = self._execute("document", "integrate")

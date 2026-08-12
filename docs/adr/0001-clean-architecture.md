@@ -17,6 +17,11 @@
 - infrastructure는 소스, 파서, 모델, DB, 벡터, 웹, secret 어댑터를 구현한다.
 - presentation은 CLI/API 요청을 유스케이스에 전달한다.
 - bootstrap만 구체 구현을 조립한다.
+- 실행 컨테이너와 런타임 진단값은 application 계약이며 구체 설정·저장소 타입을 노출하지 않는다.
+- bootstrap은 factory를 Presentation controller에 주입하고, Presentation은 bootstrap이나
+  infrastructure를 import하지 않는다.
+- 동적 Job stage도 bootstrap이 전달한 source·workspace·model·structured generator factory만
+  사용한다.
 - 의존성은 바깥에서 안쪽으로만 향한다.
 - 아키텍처 규칙을 CI의 AST·import 검사로 강제한다.
 
@@ -49,6 +54,7 @@
 
 - domain 외부 프레임워크 import 0
 - application의 infrastructure import 0
+- presentation의 infrastructure·bootstrap import 0 (`__main__.py` composition shim 제외)
 - import 시 I/O 0
 - 모든 외부 기술에 application port 존재
 - bootstrap 외 구체 어댑터 생성 0

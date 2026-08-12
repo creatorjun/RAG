@@ -1,3 +1,3 @@
-from enterprise_rag.presentation.gui.app import main
+from enterprise_rag.bootstrap import gui_main
 
-raise SystemExit(main())
+raise SystemExit(gui_main())

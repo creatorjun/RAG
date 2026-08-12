@@ -155,6 +155,34 @@ _REVISION_ERROR_SPECS: dict[str, tuple[ErrorCategory, str]] = {
         ErrorCategory.INTERNAL,
         "작업 실행 프로세스를 시작하지 못했습니다.",
     ),
+    "JOB_CANCELLED": (
+        ErrorCategory.CANCELLED,
+        "문서 작업이 안전하게 취소되었습니다.",
+    ),
+    "RUNNER_CANCELLATION_FAILED": (
+        ErrorCategory.INTERNAL,
+        "작업 실행 프로세스에 취소 신호를 전달하지 못했습니다.",
+    ),
+    "RUNNER_PROCESS_MISMATCH": (
+        ErrorCategory.SECURITY_BLOCK,
+        "저장된 작업 프로세스와 운영체제 프로세스 그룹이 일치하지 않습니다.",
+    ),
+    "JOB_RESULT_INVALID": (
+        ErrorCategory.DATA_CORRUPTION,
+        "게시 결과나 품질 보고서를 검증할 수 없습니다.",
+    ),
+    "NOTIFICATION_RECEIPT_INVALID": (
+        ErrorCategory.DATA_CORRUPTION,
+        "완료 알림 영수증을 검증할 수 없습니다.",
+    ),
+    "NOTIFICATION_UNAVAILABLE": (
+        ErrorCategory.INTERNAL,
+        "현재 환경에서 시스템 완료 알림을 사용할 수 없습니다.",
+    ),
+    "NOTIFICATION_FAILED": (
+        ErrorCategory.INTERNAL,
+        "시스템 완료 알림을 전달하지 못했습니다.",
+    ),
     "RUNNER_LEASE_INVALID": (
         ErrorCategory.DATA_CORRUPTION,
         "저장된 작업 실행 상태를 검증할 수 없습니다.",

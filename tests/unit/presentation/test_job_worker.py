@@ -4,7 +4,6 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import patch
 
 from enterprise_rag.application.dto.jobs import DocumentJobDto
 from enterprise_rag.application.dto.runner import RunnerLifecycle
@@ -18,8 +17,10 @@ class _Run:
         self.result = result
         self.error = error
         self.delay = delay
+        self.calls = []
 
     async def execute(self, job_id):
+        self.calls.append(job_id)
         if self.delay:
             import asyncio
 
@@ -45,6 +46,18 @@ class _Leases:
         self.finishes.append(args)
 
 
+class _Termination:
+    def __init__(self) -> None:
+        self.requests = 0
+        self.closed = 0
+
+    def request(self) -> None:
+        self.requests += 1
+
+    def close(self) -> None:
+        self.closed += 1
+
+
 class _Application:
     def __init__(self, run, heartbeat_seconds=5.0) -> None:
         self.run_document_job = run
@@ -55,6 +68,9 @@ class _Application:
             {"now": staticmethod(lambda: datetime(2026, 8, 12, tzinfo=timezone.utc))},
         )()
         self.heartbeat_seconds = heartbeat_seconds
+        self.termination = _Termination()
+        self.confirm_document_job_cancellation = _Run()
+        self.notify_document_job_completion = _Run()
 
     def __enter__(self):
         return self
@@ -81,30 +97,19 @@ class JobWorkerTest(unittest.TestCase):
                 "runner-" + "1" * 32,
             ]
             success = _Application(_Run(result=result))
-            with patch(
-                "enterprise_rag.presentation.job_worker.build_job_worker_application",
-                return_value=success,
-            ):
-                self.assertEqual(main(arguments), 0)
+            self.assertEqual(main(lambda *_: success, arguments), 0)
             self.assertEqual(
                 success.runner_leases.finishes[-1][3], RunnerLifecycle.EXITED
             )
+            self.assertEqual(success.notify_document_job_completion.calls, [job_id])
             failure = _Application(_Run(error=revision_error("IO_FAILURE")))
-            with patch(
-                "enterprise_rag.presentation.job_worker.build_job_worker_application",
-                return_value=failure,
-            ):
-                self.assertEqual(main(arguments), 2)
+            self.assertEqual(main(lambda *_: failure, arguments), 2)
             self.assertEqual(
                 failure.runner_leases.finishes[-1][3], RunnerLifecycle.FAILED
             )
             self.assertEqual(failure.runner_leases.finishes[-1][-1], "IO_FAILURE")
             internal = _Application(_Run(error=ValueError("unexpected")))
-            with patch(
-                "enterprise_rag.presentation.job_worker.build_job_worker_application",
-                return_value=internal,
-            ):
-                self.assertEqual(main(arguments), 1)
+            self.assertEqual(main(lambda *_: internal, arguments), 1)
             self.assertEqual(
                 internal.runner_leases.finishes[-1][-1],
                 "WORKER_INTERNAL_FAILURE",
@@ -117,11 +122,9 @@ class JobWorkerTest(unittest.TestCase):
             _Run(result=result, delay=0.025),
             heartbeat_seconds=0.005,
         )
-        with tempfile.TemporaryFile() as lock_stream, patch(
-            "enterprise_rag.presentation.job_worker.build_job_worker_application",
-            return_value=application,
-        ):
+        with tempfile.TemporaryFile() as lock_stream:
             code = main(
+                lambda *_: application,
                 [
                     "--project-root",
                     str(Path.cwd()),
@@ -142,6 +145,7 @@ class JobWorkerTest(unittest.TestCase):
         with tempfile.TemporaryFile() as lock_stream:
             descriptor = lock_stream.fileno()
         result = main(
+            lambda *_: _Application(_Run()),
             [
                 "--project-root",
                 str(Path.cwd()),

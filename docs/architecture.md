@@ -118,6 +118,12 @@ runner token을 자식 PID가 claim한다. Worker는 `runner-state.json`을 5초
 제어 plane은 3회 누락을 `STALE`로 관측하되 SQLite Job 상태를 추측으로 완료·실패 처리하지 않는다.
 OS가 비정상 종료 프로세스의 lock을 해제한 뒤에만 다음 launcher가 새 launch sequence를 만들 수 있다.
 
+취소 제어 plane은 먼저 SQLite Job을 `CANCELLING`으로 전이한 후 runner lease의 PID와 독립 process
+group을 교차 검증해 `SIGTERM`을 전달한다. Worker는 신호를 thread-safe token으로 바꾸고 MLX
+`stream_generate`의 토큰 경계에서 부분 출력을 폐기한다. 동시에 Job을 `CANCELLED`로 확인하며,
+15초 안에 체크포인트 정리와 정상 종료가 끝나지 않을 때만 Worker 자체 watchdog이 자기 process
+group을 `SIGKILL`한다. 따라서 GUI나 CLI 프로세스가 먼저 종료되어도 강제 종료 deadline은 유지된다.
+
 모델 탐색은 `ModelCatalogPort` 뒤에 둔다. 로컬 cache scan은 네트워크 없이 수행하고, 원격
 Hugging Face 검색은 GUI에서 오프라인 모드를 해제한 뒤 명시적으로 요청할 때만 수행한다.
 검색 결과는 MLX 모델 ID와 정확한 commit으로 고정하며 크기·양자화·context·라이선스와 물리
@@ -129,6 +135,16 @@ Hub dry-run으로 미캐시 파일과 전송 바이트를 확정하고 cache vol
 진행 callback은 원문과 인증정보 없이 파일·바이트 건수만 전달한다. 취소 또는 실패한 전송은
 Job을 만들지 않으며, 완료 snapshot을 exact commit·config·weight·cache 경로로 재검증한 뒤에만
 로컬 모델 선택으로 승격한다.
+
+게시 결과 조회는 별도 `DocumentJobResultReaderPort` 뒤에서 수행한다. 파일 경로를 UI가 조합하지
+않으며 adapter가 Job definition, 품질 보고서, 게시 체크포인트와 실제 run의 문서·비교·합성 해시를
+대조한 뒤 immutable DTO만 반환한다. 새 게시 체크포인트는 비교 JSON뿐 아니라 사람이 여는 비교
+Markdown과 합성 JSON의 SHA-256도 포함한다.
+
+완료 알림은 Worker가 게시 Job을 `COMPLETED`로 commit한 뒤 수행하고 GUI가 recovery trigger를
+제공한다. 두 경로는 Job별 receipt lock과 같은 publication fingerprint를 사용한다. 첫 호출자만
+`CLAIMED`를 원자 기록하고 정적 AppleScript가 환경 변수로 전달받은 제목·본문을 표시한다.
+따라서 사용자 문자열을 AppleScript 코드에 삽입하지 않고 정상·동시 실행에서 중복 알림을 막는다.
 
 ### 3.2 Track A Worker Process
 
@@ -160,6 +176,7 @@ Track B 워커는 Qwen 전용이며 동시 생성 작업은 1개다. `ACCELERATO
 ```mermaid
 flowchart TB
     P["presentation"] --> A["application"]
+    P --> D["domain"]
     I["infrastructure"] --> A
     A --> D["domain"]
     I --> D
@@ -175,16 +192,24 @@ flowchart TB
 | `domain` | Python 표준 라이브러리와 같은 계층 내부 |
 | `application` | `domain`, `application` 내부 |
 | `infrastructure` | `application` 포트, `domain`, 인프라 라이브러리 |
-| `presentation` | `application` DTO와 유스케이스 |
+| `presentation` | `application` DTO·유스케이스·실행 계약, `domain`의 상태·오류 값 |
 | `bootstrap` | 모든 계층의 조립 지점 |
+
+`Application`, `JobApplication`, `JobWorkerApplication` 실행 계약은 Application 계층에 둔다.
+이 계약은 진단·GUI 런타임 DTO와 포트 타입만 노출하며 `LoadedSettings`, 파일 저장소, 시스템
+clock 같은 구체 Infrastructure 타입을 노출하지 않는다. 콘솔 진입점은 `bootstrap`이
+Presentation controller에 factory를 주입하는 composition root다.
 
 ### 4.2 금지 규칙
 
 - `domain`에서 MLX, PyTorch, FAISS, SQLite, HTTP, 파일 시스템 import 금지
 - `application`에서 구체 어댑터 import 금지
 - 유스케이스에서 전역 싱글턴, 환경 변수, 현재 시각 직접 참조 금지
-- 인프라 어댑터 간 직접 호출 금지
-- 프레젠테이션에서 DB·모델·파일 경로 직접 접근 금지
+- 인프라 어댑터가 다른 구체 어댑터를 선택·생성하는 것 금지. 같은 계층의 무상태 file/path
+  helper 재사용은 허용하고, 동적 어댑터는 bootstrap이 주입한 factory로만 생성
+- 프레젠테이션에서 DB·모델·파일 본문 I/O 직접 접근 금지
+- 프레젠테이션에서 `bootstrap`, `infrastructure` import 금지. `__main__.py` 호환 shim은
+  composition root로 취급
 - 모듈 import 시 모델 로드, DB 연결, 네트워크 호출 금지
 
 ## 5. 컴포넌트 책임
@@ -352,7 +377,9 @@ sequenceDiagram
 | FAISS reader | VectorIndexManager | 세대 활성화 | 세대 교체 후 참조 0일 때 close | 이전 세대 재활성화 |
 | 산출물 임시 세대 | Publisher | 게시 시작 | 활성화 후 보존 정책 적용 | 미완료 세대 삭제 |
 
-워커 강제 종료는 정상 취소 유예 15초 후에만 사용한다. 강제 종료된 작업은 성공으로 간주하지 않으며 Coordinator가 리스를 만료하고 작업을 회수한다.
+워커 강제 종료는 정상 취소 유예 15초 후에만 사용한다. 강제 종료된 작업은 성공으로 간주하지
+않고 `CANCELLED` 상태와 완료 체크포인트만 유지한다. 강제 종료로 lease 종료 기록을 남기지 못한
+경우 heartbeat는 `STALE`이 되며, OS lock 해제를 확인한 뒤에만 후속 실행 권한을 판단한다.
 
 ## 9. 실패 경계
 
@@ -377,6 +404,7 @@ API를 활성화할 경우 기본 bind는 `127.0.0.1`이며 인증 없는 외부
 ## 11. 아키텍처 검증 규칙
 
 - `import-linter` 또는 동등한 AST 검사로 계층 의존성 위반 0건
+- Presentation→Bootstrap/Infrastructure와 Job stage의 구체 어댑터 import를 AST로 차단
 - import만으로 외부 I/O가 발생하지 않는 스모크 테스트
 - 모든 포트에 최소 하나의 프로덕션 어댑터 또는 명시적 disabled 어댑터 존재
 - 모든 리소스 소유 어댑터에 `close` 또는 컨텍스트 관리자 계약 존재

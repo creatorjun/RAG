@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import unittest
-from dataclasses import dataclass
 
 from enterprise_rag.application.dto.desktop_settings import DesktopSettingsDto
 from enterprise_rag.application.dto.job_dashboard import JobDashboardDto
+from enterprise_rag.application.dto.job_result import (
+    CompletionNotificationDto,
+    CompletionNotificationState,
+    DocumentJobResultDto,
+    JobResultAvailability,
+)
 from enterprise_rag.application.dto.jobs import DocumentJobDto
 from enterprise_rag.application.dto.model_catalog import (
     ModelCatalogDto,
@@ -12,6 +17,7 @@ from enterprise_rag.application.dto.model_catalog import (
     ModelCatalogOrigin,
     ModelCompatibility,
 )
+from enterprise_rag.application.runtime import DesktopRuntimeDto
 from enterprise_rag.domain.jobs import DocumentJobState
 from enterprise_rag.presentation.gui.view_model import DesktopViewModel
 
@@ -26,28 +32,32 @@ class _AsyncCall:
         return self.result
 
 
-@dataclass
-class _Paths:
-    var_root: object
-
-
-@dataclass
-class _Configuration:
-    paths: _Paths
-
-
 class _Application:
     def __init__(self, settings: DesktopSettingsDto) -> None:
-        from pathlib import Path
-
         job = DocumentJobDto("job-" + "a" * 32, DocumentJobState.CREATED, 0, 0)
         dashboard = JobDashboardDto(job, (), ())
-        self.configuration = _Configuration(_Paths(Path("/workspace/var")))
+        self.runtime = DesktopRuntimeDto(
+            "/workspace/var/jobs",
+            15,
+        )
         self.get_desktop_settings = _AsyncCall(settings)
         self.update_desktop_settings = _AsyncCall(settings)
         self.list_document_jobs = _AsyncCall((job,))
         self.create_configured_document_job = _AsyncCall(job)
         self.get_job_dashboard = _AsyncCall(dashboard)
+        result = DocumentJobResultDto(
+            job.job_id,
+            job.state,
+            JobResultAvailability.NOT_READY,
+            True,
+        )
+        notification = CompletionNotificationDto(
+            job.job_id,
+            CompletionNotificationState.NOT_READY,
+        )
+        self.get_document_job_result = _AsyncCall(result)
+        self.get_completion_notification_status = _AsyncCall(notification)
+        self.notify_document_job_completion = _AsyncCall(notification)
         self.start_document_job = _AsyncCall(
             type("Launch", (), {"process_id": 321})()
         )
@@ -95,6 +105,7 @@ class DesktopViewModelTest(unittest.TestCase):
         application = _Application(settings)
         view_model = DesktopViewModel(application)  # type: ignore[arg-type]
         self.assertEqual(view_model.checkpoint_root, "/workspace/var/jobs")
+        self.assertEqual(view_model.cancellation_grace_seconds, 15)
         self.assertEqual(view_model.load_settings(), settings)
         self.assertEqual(view_model.save_settings(settings), settings)
         self.assertEqual(view_model.list_jobs()[0].job_id, "job-" + "a" * 32)
@@ -123,6 +134,18 @@ class DesktopViewModelTest(unittest.TestCase):
         self.assertEqual(
             view_model.dashboard("job-" + "a" * 32).job.state,
             DocumentJobState.CREATED,
+        )
+        self.assertEqual(
+            view_model.job_result("job-" + "a" * 32),
+            application.get_document_job_result.result,
+        )
+        self.assertEqual(
+            view_model.completion_notification_status("job-" + "a" * 32),
+            application.get_completion_notification_status.result,
+        )
+        self.assertEqual(
+            view_model.notify_completion("job-" + "a" * 32),
+            application.notify_document_job_completion.result,
         )
         self.assertEqual(view_model.start_job("job-" + "a" * 32), 321)
         self.assertEqual(

@@ -6,6 +6,9 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from enterprise_rag.domain.errors import ApplicationError
+from enterprise_rag.infrastructure.jobs.thread_cancellation import (
+    ThreadCancellationToken,
+)
 from enterprise_rag.infrastructure.models.mlx_text_generator import MlxTextGenerator
 
 
@@ -75,18 +78,53 @@ class MlxTextGeneratorTest(unittest.TestCase):
         tokenizer = _FakeTokenizer(reject_thinking_option=True)
         generator._model = object()
         generator._tokenizer = tokenizer
-        generate = Mock(return_value="<think>private reasoning</think>\n# result")
+        stream_generate = Mock(
+            return_value=iter(
+                (
+                    SimpleNamespace(text="<think>private reasoning</think>\n"),
+                    SimpleNamespace(text="# result"),
+                )
+            )
+        )
         sampler = object()
         modules = {
-            "mlx_lm": SimpleNamespace(generate=generate),
+            "mlx_lm": SimpleNamespace(stream_generate=stream_generate),
             "mlx_lm.sample_utils": SimpleNamespace(make_sampler=Mock(return_value=sampler)),
         }
         with patch("importlib.import_module", side_effect=lambda name: modules[name]):
             result = asyncio.run(generator.generate("system", "user", 128))
         self.assertEqual(result, "# result")
         self.assertEqual(tokenizer.template_calls, 2)
-        generate.assert_called_once()
-        self.assertIs(generate.call_args.kwargs["sampler"], sampler)
+        stream_generate.assert_called_once()
+        self.assertIs(stream_generate.call_args.kwargs["sampler"], sampler)
+
+    def test_stops_stream_generation_at_the_next_token_boundary(self) -> None:
+        cancellation = ThreadCancellationToken()
+        generator = MlxTextGenerator(
+            "test/model",
+            "a" * 40,
+            1024,
+            128,
+            cancellation=cancellation,
+        )
+        generator._model = object()
+        generator._tokenizer = _FakeTokenizer()
+
+        def responses():
+            yield SimpleNamespace(text="partial")
+            cancellation.cancel()
+            yield SimpleNamespace(text="must-not-be-returned")
+
+        modules = {
+            "mlx_lm": SimpleNamespace(stream_generate=Mock(return_value=responses())),
+            "mlx_lm.sample_utils": SimpleNamespace(make_sampler=Mock()),
+        }
+        with (
+            patch("importlib.import_module", side_effect=lambda name: modules[name]),
+            self.assertRaises(ApplicationError) as captured,
+        ):
+            asyncio.run(generator.generate("system", "user", 128))
+        self.assertEqual(captured.exception.code, "JOB_CANCELLED")
 
     def test_rejects_prompt_over_context_budget(self) -> None:
         generator = _generator(context_tokens=512)

@@ -12,6 +12,9 @@ from enterprise_rag.application.dto.progress import ProgressEventDto
 from enterprise_rag.application.use_cases.run_document_job import RunDocumentJob
 from enterprise_rag.domain.errors import ApplicationError, revision_error
 from enterprise_rag.domain.jobs import DocumentJob, DocumentJobState
+from enterprise_rag.infrastructure.jobs.thread_cancellation import (
+    ThreadCancellationToken,
+)
 from enterprise_rag.infrastructure.persistence.sqlite_document_job_repository import (
     SqliteDocumentJobRepository,
 )
@@ -295,6 +298,28 @@ class DocumentJobOrchestratorTest(unittest.TestCase):
             self.assertEqual(result.state, DocumentJobState.CANCELLED)
             self.assertEqual(asyncio.run(repository.list_after(job.job_id)), ())
             self.assertEqual([stage.calls for stage in stages[1:]], [0] * 9)
+
+    def test_cancelled_token_stops_before_starting_the_first_stage(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repository = SqliteDocumentJobRepository(
+                Path(temporary).resolve() / "metadata.sqlite3",
+                _FixedClock(),
+            )
+            job = DocumentJob("job-" + "6" * 32)
+            asyncio.run(repository.create(job))
+            stages = tuple(_Stage(state) for state in _ACTIVE_STATES)
+            cancellation = ThreadCancellationToken()
+            cancellation.cancel()
+            result = asyncio.run(
+                RunDocumentJob(
+                    repository,
+                    repository,
+                    stages,
+                    cancellation,
+                ).execute(job.job_id)
+            )
+            self.assertEqual(result.state, DocumentJobState.CANCELLED)
+            self.assertEqual([stage.calls for stage in stages], [0] * 10)
 
 
 if __name__ == "__main__":

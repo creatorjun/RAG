@@ -7,6 +7,7 @@ import re
 import threading
 from typing import Any
 
+from enterprise_rag.application.ports.cancellation import CancellationTokenPort
 from enterprise_rag.domain.errors import ApplicationError, revision_error
 
 
@@ -18,12 +19,14 @@ class MlxTextGenerator:
         maximum_context_tokens: int,
         reserved_tokens: int,
         offline_mode: bool = False,
+        cancellation: CancellationTokenPort | None = None,
     ) -> None:
         self._model_id = model_id
         self._model_revision = model_revision
         self._maximum_context_tokens = maximum_context_tokens
         self._reserved_tokens = reserved_tokens
         self._offline_mode = offline_mode
+        self._cancellation = cancellation
         self._model: Any | None = None
         self._tokenizer: Any | None = None
         self._load_lock = threading.Lock()
@@ -38,7 +41,9 @@ class MlxTextGenerator:
 
     async def prepare(self) -> None:
         try:
+            self._raise_if_cancelled()
             await asyncio.to_thread(self._load)
+            self._raise_if_cancelled()
         except ApplicationError:
             raise
         except Exception as error:
@@ -51,6 +56,7 @@ class MlxTextGenerator:
         max_output_tokens: int,
     ) -> str:
         try:
+            self._raise_if_cancelled()
             return await asyncio.to_thread(
                 self._generate_sync,
                 system_prompt,
@@ -98,17 +104,29 @@ class MlxTextGenerator:
             sample_utils = importlib.import_module("mlx_lm.sample_utils")
         except ModuleNotFoundError as error:
             raise revision_error("DEPENDENCY_MISSING", {"dependency": "mlx-lm"}) from error
-        result = mlx_lm.generate(
+        self._raise_if_cancelled()
+        responses = mlx_lm.stream_generate(
             model,
             tokenizer,
             prompt=prompt,
             max_tokens=max_output_tokens,
             sampler=sample_utils.make_sampler(temp=0.0),
-            verbose=False,
         )
+        pieces: list[str] = []
+        try:
+            for response in responses:
+                self._raise_if_cancelled()
+                pieces.append(str(response.text))
+        finally:
+            close = getattr(responses, "close", None)
+            if close is not None:
+                close()
+        self._raise_if_cancelled()
+        result = "".join(pieces)
         return self._strip_reasoning(result)
 
     def _load(self) -> tuple[Any, Any]:
+        self._raise_if_cancelled()
         if self._model is not None and self._tokenizer is not None:
             return self._model, self._tokenizer
         with self._load_lock:
@@ -140,7 +158,12 @@ class MlxTextGenerator:
                     self._model_id,
                     revision=self._model_revision,
                 )
+        self._raise_if_cancelled()
         return self._model, self._tokenizer
+
+    def _raise_if_cancelled(self) -> None:
+        if self._cancellation is not None:
+            self._cancellation.raise_if_cancelled()
 
     @staticmethod
     def _strip_reasoning(value: str) -> str:

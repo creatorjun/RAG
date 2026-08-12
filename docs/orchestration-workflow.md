@@ -65,6 +65,7 @@ var/jobs/<job_id>/
 ├── derived/assembled-draft.md
 ├── control/final-validation.json
 ├── control/publish-result.json
+├── control/completion-notification.json
 ├── runner-state.json
 ├── .runner-state.lock
 ├── .runner.lock
@@ -74,6 +75,10 @@ var/jobs/<job_id>/
 상태·진행 이벤트는 파일이 아니라 SQLite에 순서 번호와 함께 저장한다. 각 구조화
 아티팩트는 schema version과 Job ID를 포함하고, 입력·파이프라인 hash로 같은 실행의
 결과임을 재검증한다. 완료된 아티팩트는 in-place로 수정하지 않고 새 attempt를 기록한다.
+
+`publish-result.json`은 최종 문서, 비교 JSON·Markdown과 합성 보고서의 SHA-256을 보존한다.
+`completion-notification.json`은 게시 fingerprint별 알림 선점·전달 결과를 기록하는 가변 운영
+영수증이며 별도 파일 lock 아래에서만 갱신한다.
 
 `runner-state.json`은 체크포인트가 아니라 프로세스 관측용 가변 상태다. launcher가 Job별
 `.runner.lock`을 먼저 획득하고 새 runner token과 launch sequence를 기록한다. 자식 Worker는

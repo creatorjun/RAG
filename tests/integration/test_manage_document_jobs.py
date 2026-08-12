@@ -8,6 +8,7 @@ from pathlib import Path
 
 from enterprise_rag.application.dto.progress import ProgressEventDto
 from enterprise_rag.application.use_cases.manage_document_jobs import (
+    ConfirmDocumentJobCancellation,
     GetDocumentJob,
     ListDocumentJobEvents,
     ListDocumentJobs,
@@ -23,6 +24,16 @@ from enterprise_rag.infrastructure.persistence.sqlite_document_job_repository im
 class _Clock:
     def now(self) -> datetime:
         return datetime(2026, 8, 12, tzinfo=timezone.utc)
+
+
+class _RunnerCancellation:
+    def __init__(self, delivered: bool) -> None:
+        self.delivered = delivered
+        self.requests: list[str] = []
+
+    async def request(self, job_id: str) -> bool:
+        self.requests.append(job_id)
+        return self.delivered
 
 
 class ManageDocumentJobsTest(unittest.TestCase):
@@ -105,6 +116,49 @@ class ManageDocumentJobsTest(unittest.TestCase):
                 RequestDocumentJobCancellation(repository).execute(job.job_id)
             )
             self.assertEqual(result.state, DocumentJobState.COMPLETED)
+
+    def test_signals_running_worker_or_confirms_when_no_process_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repository = SqliteDocumentJobRepository(
+                Path(temporary).resolve() / "metadata.sqlite3",
+                _Clock(),
+            )
+            running = DocumentJob("job-" + "d" * 32)
+            pending = DocumentJob("job-" + "e" * 32)
+            asyncio.run(repository.create(running))
+            asyncio.run(repository.create(pending))
+            delivered = _RunnerCancellation(True)
+            signalling = asyncio.run(
+                RequestDocumentJobCancellation(repository, delivered).execute(
+                    running.job_id
+                )
+            )
+            self.assertEqual(signalling.state, DocumentJobState.CANCELLING)
+            self.assertEqual(delivered.requests, [running.job_id])
+            repeated = asyncio.run(
+                RequestDocumentJobCancellation(repository, delivered).execute(
+                    running.job_id
+                )
+            )
+            self.assertEqual(repeated.state, DocumentJobState.CANCELLING)
+            self.assertEqual(delivered.requests, [running.job_id, running.job_id])
+            confirmed = asyncio.run(
+                ConfirmDocumentJobCancellation(repository).execute(running.job_id)
+            )
+            confirmed_again = asyncio.run(
+                ConfirmDocumentJobCancellation(repository).execute(running.job_id)
+            )
+            self.assertEqual(confirmed.state, DocumentJobState.CANCELLED)
+            self.assertEqual(confirmed_again, confirmed)
+
+            absent = _RunnerCancellation(False)
+            cancelled = asyncio.run(
+                RequestDocumentJobCancellation(repository, absent).execute(
+                    pending.job_id
+                )
+            )
+            self.assertEqual(cancelled.state, DocumentJobState.CANCELLED)
+            self.assertEqual(absent.requests, [pending.job_id])
 
 
 if __name__ == "__main__":

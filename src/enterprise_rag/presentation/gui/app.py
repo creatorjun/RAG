@@ -11,6 +11,12 @@ from typing import Any, cast
 
 from enterprise_rag.application.dto.desktop_settings import DesktopSettingsDto
 from enterprise_rag.application.dto.job_dashboard import CheckpointStatus, JobDashboardDto
+from enterprise_rag.application.dto.job_result import (
+    CompletionNotificationDto,
+    CompletionNotificationState,
+    DocumentJobResultDto,
+    JobResultAvailability,
+)
 from enterprise_rag.application.dto.model_catalog import (
     ModelCatalogDto,
     ModelCatalogEntryDto,
@@ -21,8 +27,9 @@ from enterprise_rag.application.dto.model_download import (
     ModelDownloadState,
 )
 from enterprise_rag.application.dto.runner import RunnerHealth
-from enterprise_rag.bootstrap import build_job_application
+from enterprise_rag.application.runtime import JobApplication
 from enterprise_rag.domain.errors import ApplicationError
+from enterprise_rag.domain.jobs import DocumentJobState
 from enterprise_rag.presentation.gui.view_model import DesktopViewModel
 
 _FIXED_POLICY_PREVIEW = """고정 정책(편집 불가)
@@ -55,6 +62,10 @@ class _DesktopWindow:
         self._settings: DesktopSettingsDto | None = None
         self._active_job_id: str | None = None
         self._active_download_id: str | None = None
+        self._notification_requests: set[str] = set()
+        self._result_paths: dict[str, str] = {}
+        self._result_fields: dict[str, Any] = {}
+        self._result_buttons: dict[str, Any] = {}
         self._closing = False
         self._executor = ThreadPoolExecutor(
             max_workers=1,
@@ -277,10 +288,10 @@ class _DesktopWindow:
         self._instruction.setMaximumHeight(95)
         self._create_button = self._widgets.QPushButton("새 작업 생성")
         self._create_button.clicked.connect(self._create_job)
-        start = self._widgets.QPushButton("파이프라인 시작/재개")
-        start.clicked.connect(self._start_job)
-        cancel = self._widgets.QPushButton("안전 취소 요청")
-        cancel.clicked.connect(self._cancel_job)
+        self._start_button = self._widgets.QPushButton("파이프라인 시작/재개")
+        self._start_button.clicked.connect(self._start_job)
+        self._cancel_job_button = self._widgets.QPushButton("즉시 취소 요청")
+        self._cancel_job_button.clicked.connect(self._cancel_job)
         refresh = self._widgets.QPushButton("상세 새로고침")
         refresh.clicked.connect(self._refresh_dashboard)
         control_layout.addWidget(self._widgets.QLabel("기존 작업"), 0, 0)
@@ -291,9 +302,9 @@ class _DesktopWindow:
         control_layout.addWidget(self._widgets.QLabel("작업 지시"), 2, 0)
         control_layout.addWidget(self._instruction, 2, 1, 1, 4)
         control_layout.addWidget(self._create_button, 3, 1)
-        control_layout.addWidget(start, 3, 2)
+        control_layout.addWidget(self._start_button, 3, 2)
         control_layout.addWidget(refresh, 3, 3)
-        control_layout.addWidget(cancel, 3, 4)
+        control_layout.addWidget(self._cancel_job_button, 3, 4)
         layout.addWidget(control)
 
         summary = self._widgets.QGroupBox("현재 진행 상황")
@@ -313,6 +324,37 @@ class _DesktopWindow:
         summary_layout.addWidget(self._widgets.QLabel("현재 작업"), 3, 0)
         summary_layout.addWidget(self._last_message, 3, 1, 1, 3)
         layout.addWidget(summary)
+
+        result_group = self._widgets.QGroupBox("게시 결과·품질·완료 알림")
+        result_layout = self._widgets.QGridLayout(result_group)
+        self._result_status = self._widgets.QLabel("결과 대기 중")
+        self._quality_summary = self._widgets.QLabel("품질 보고서 대기 중")
+        self._comparison_summary = self._widgets.QLabel("비교 보고서 대기 중")
+        self._notification_status = self._widgets.QLabel("알림 상태 대기 중")
+        for label in (
+            self._result_status,
+            self._quality_summary,
+            self._comparison_summary,
+            self._notification_status,
+        ):
+            label.setWordWrap(True)
+        result_layout.addWidget(self._widgets.QLabel("게시 상태"), 0, 0)
+        result_layout.addWidget(self._result_status, 0, 1, 1, 3)
+        result_layout.addWidget(self._widgets.QLabel("품질 지표"), 1, 0)
+        result_layout.addWidget(self._quality_summary, 1, 1, 1, 3)
+        result_layout.addWidget(self._widgets.QLabel("비교 건수"), 2, 0)
+        result_layout.addWidget(self._comparison_summary, 2, 1, 1, 3)
+        result_layout.addWidget(self._widgets.QLabel("완료 알림"), 3, 0)
+        result_layout.addWidget(self._notification_status, 3, 1, 1, 3)
+        result_layout.addWidget(self._widgets.QLabel("최종 문서"), 4, 0)
+        result_layout.addWidget(self._result_path_row("document"), 4, 1, 1, 3)
+        result_layout.addWidget(self._widgets.QLabel("품질 JSON"), 5, 0)
+        result_layout.addWidget(self._result_path_row("quality"), 5, 1, 1, 3)
+        result_layout.addWidget(self._widgets.QLabel("비교 보고서"), 6, 0)
+        result_layout.addWidget(self._result_path_row("comparison"), 6, 1, 1, 3)
+        result_layout.addWidget(self._widgets.QLabel("합성 보고서"), 7, 0)
+        result_layout.addWidget(self._result_path_row("synthesis"), 7, 1, 1, 3)
+        layout.addWidget(result_group)
 
         splitter = self._widgets.QSplitter(self._core.Qt.Orientation.Vertical)
         checkpoint_group = self._widgets.QGroupBox("체크포인트 저장·재개 상태")
@@ -343,6 +385,21 @@ class _DesktopWindow:
         splitter.setSizes((380, 300))
         layout.addWidget(splitter, 1)
         return page
+
+    def _result_path_row(self, key: str) -> Any:
+        container = self._widgets.QWidget()
+        layout = self._widgets.QHBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        field = self._widgets.QLineEdit()
+        field.setReadOnly(True)
+        button = self._widgets.QPushButton("열기")
+        button.setEnabled(False)
+        button.clicked.connect(lambda: self._open_result_path(key))
+        self._result_fields[key] = field
+        self._result_buttons[key] = button
+        layout.addWidget(field, 1)
+        layout.addWidget(button)
+        return container
 
     def _folder_row(self, field: Any) -> Any:
         container = self._widgets.QWidget()
@@ -773,12 +830,20 @@ class _DesktopWindow:
         answer = self._widgets.QMessageBox.question(
             self.window,
             "작업 취소",
-            "현재 작업에 안전 취소를 요청하시겠습니까? 저장된 체크포인트는 유지됩니다.",
+            "현재 작업을 즉시 취소하시겠습니까?\n\n"
+            "모델 생성은 토큰 경계에서 중단하고 저장된 체크포인트는 유지합니다. "
+            f"{self._view_model.cancellation_grace_seconds}초 안에 정상 종료되지 않는 "
+            "Worker만 강제 종료합니다.",
         )
         if answer != self._widgets.QMessageBox.StandardButton.Yes:
             return
         try:
             self._view_model.cancel_job(self._active_job_id)
+            self._last_message.setText(
+                "취소 신호를 전달했습니다. 모델 생성 중이면 다음 토큰 경계에서 중단하며 "
+                f"최대 {self._view_model.cancellation_grace_seconds}초 동안 정상 종료를 기다립니다."
+            )
+            self._cancel_job_button.setEnabled(False)
             self._reload_jobs()
         except Exception as error:
             self._show_error(error)
@@ -801,6 +866,12 @@ class _DesktopWindow:
         try:
             dashboard = self._view_model.dashboard(self._active_job_id)
             self._render_dashboard(dashboard)
+            result = self._view_model.job_result(self._active_job_id)
+            notification = self._view_model.completion_notification_status(
+                self._active_job_id
+            )
+            self._render_result(result, notification)
+            self._request_ready_notification(result, notification)
         except ApplicationError as error:
             if error.code == "JOB_NOT_FOUND":
                 self._reload_jobs()
@@ -809,14 +880,127 @@ class _DesktopWindow:
         except Exception as error:
             self._show_error(error)
 
+    def _render_result(
+        self,
+        result: DocumentJobResultDto,
+        notification: CompletionNotificationDto,
+    ) -> None:
+        status_text = {
+            JobResultAvailability.NOT_READY: "아직 최종 품질·게시 결과가 없습니다.",
+            JobResultAvailability.QUALITY_READY: "최종 품질 보고서가 생성됐고 게시를 기다립니다.",
+            JobResultAvailability.PUBLISHED: "게시 문서와 비교 보고서 무결성 검증을 통과했습니다.",
+        }[result.availability]
+        self._result_status.setText(f"{result.availability.value} · {status_text}")
+        quality = result.quality
+        if quality is None:
+            self._quality_summary.setText("품질 보고서 대기 중")
+        else:
+            errors = "없음" if not quality.error_codes else ", ".join(quality.error_codes)
+            self._quality_summary.setText(
+                f"{'통과' if quality.valid else '실패'} · "
+                f"Task {quality.validated_task_count}/{quality.task_count} · "
+                f"Claim {quality.covered_claim_count}/{quality.claim_count} · "
+                f"Evidence {quality.covered_evidence_count}/{quality.evidence_count} · "
+                f"원본 {quality.source_document_count}개 · 오류 {errors}"
+            )
+        counts = result.comparison_counts
+        if counts is None:
+            self._comparison_summary.setText("비교 보고서 대기 중")
+        else:
+            self._comparison_summary.setText(
+                f"추가 {counts.added} · 수정 {counts.modified} · "
+                f"삭제 {counts.removed} · 동일 {counts.unchanged} · 전체 {counts.total}"
+            )
+        self._render_notification(notification)
+        paths = {
+            "document": result.document_path,
+            "quality": result.quality_report_path,
+            "comparison": result.comparison_markdown_path,
+            "synthesis": result.synthesis_report_path,
+        }
+        self._result_paths.clear()
+        for key, path in paths.items():
+            self._result_fields[key].setText(path or "")
+            self._result_buttons[key].setEnabled(path is not None)
+            if path is not None:
+                self._result_paths[key] = path
+
+    def _render_notification(self, notification: CompletionNotificationDto) -> None:
+        descriptions = {
+            CompletionNotificationState.NOT_READY: "게시 완료를 기다리는 중",
+            CompletionNotificationState.DISABLED: "Job 설정에서 비활성화됨",
+            CompletionNotificationState.READY: "알림 전달 준비 완료",
+            CompletionNotificationState.CLAIMED: "알림 전달 선점됨 · 중복 전달 차단 중",
+            CompletionNotificationState.DELIVERED: "시스템 완료 알림 전달 완료",
+            CompletionNotificationState.FAILED: "시스템 완료 알림 전달 실패",
+        }
+        detail = descriptions[notification.state]
+        if notification.finished_at is not None:
+            detail += " · " + notification.finished_at.astimezone().strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
+        if notification.error_code is not None:
+            detail += f" · 오류 {notification.error_code}"
+        self._notification_status.setText(f"{notification.state.value} · {detail}")
+
+    def _request_ready_notification(
+        self,
+        result: DocumentJobResultDto,
+        notification: CompletionNotificationDto,
+    ) -> None:
+        job_id = result.job_id
+        if (
+            notification.state is not CompletionNotificationState.READY
+            or job_id in self._notification_requests
+            or self._closing
+        ):
+            return
+        self._notification_requests.add(job_id)
+        self._run_background(
+            lambda: self._view_model.notify_completion(job_id),
+            self._notification_completed,
+        )
+
+    def _notification_completed(self, value: object) -> None:
+        if not isinstance(value, CompletionNotificationDto):
+            return
+        self._notification_requests.discard(value.job_id)
+        if value.job_id == self._active_job_id:
+            self._render_notification(value)
+
+    def _open_result_path(self, key: str) -> None:
+        path = self._result_paths.get(key)
+        if path is None:
+            return
+        url = self._core.QUrl.fromLocalFile(path)
+        if not self._gui.QDesktopServices.openUrl(url):
+            self._show_error(ValueError("선택한 결과 파일을 열 수 없습니다."))
+
     def _render_dashboard(self, dashboard: JobDashboardDto) -> None:
         job = dashboard.job
         self._header_job.setText(f"활성 Job: {job.job_id}")
         self._header_state.setText(f"상태: {job.state.value}")
         self._state.setText(job.state.value)
         self._progress.setValue(job.last_percentage)
+        self._start_button.setEnabled(
+            not job.state.terminal
+            and job.state
+            not in {DocumentJobState.CANCELLING, DocumentJobState.NEEDS_ATTENTION}
+        )
+        self._cancel_job_button.setEnabled(
+            not job.state.terminal and job.state is not DocumentJobState.CANCELLING
+        )
         self._render_runner(dashboard)
-        if dashboard.events:
+        if job.state is DocumentJobState.CANCELLING:
+            self._last_message.setText(
+                "취소 처리 중 · 모델 토큰 경계에서 중단한 뒤 체크포인트를 닫는 중입니다. "
+                f"정상 종료 유예는 {self._view_model.cancellation_grace_seconds}초입니다."
+            )
+        elif job.state is DocumentJobState.CANCELLED:
+            self._last_message.setText(
+                "취소 완료 · 완료된 체크포인트는 보존되며 미완성 생성 결과는 게시되지 않습니다."
+            )
+        elif dashboard.events:
             event = dashboard.events[-1]
             counter = ""
             if event.completed is not None and event.total is not None:
@@ -879,6 +1063,16 @@ class _DesktopWindow:
         process = "PID 대기 중" if lease.process_id is None else f"PID {lease.process_id}"
         age = f"마지막 heartbeat {runner.heartbeat_age_seconds:.1f}초 전"
         detail = f"{runner.health.value} · {process} · {age} · 실행 #{lease.launch_sequence}"
+        if dashboard.job.state is DocumentJobState.CANCELLING:
+            detail += (
+                " · SIGTERM 전달 · 정상 종료 대기 "
+                f"(최대 {self._view_model.cancellation_grace_seconds}초)"
+            )
+        elif (
+            dashboard.job.state is DocumentJobState.CANCELLED
+            and runner.health in {RunnerHealth.HEALTHY, RunnerHealth.STALE}
+        ):
+            detail += " · 취소 완료 후 Worker 종료 확인 중"
         if lease.error_code is not None:
             detail += f" · 오류 {lease.error_code}"
         colors = {
@@ -896,11 +1090,21 @@ class _DesktopWindow:
         self._header_state.setText("상태: 대기")
         self._state.setText("대기")
         self._progress.setValue(0)
+        self._start_button.setEnabled(False)
+        self._cancel_job_button.setEnabled(False)
         self._runner.setText("시작 기록 없음")
         self._runner.setStyleSheet("")
         self._last_message.setText("이벤트 없음")
         self._checkpoints.setRowCount(0)
         self._events.setRowCount(0)
+        self._result_status.setText("결과 대기 중")
+        self._quality_summary.setText("품질 보고서 대기 중")
+        self._comparison_summary.setText("비교 보고서 대기 중")
+        self._notification_status.setText("알림 상태 대기 중")
+        self._result_paths.clear()
+        for key, field in self._result_fields.items():
+            field.clear()
+            self._result_buttons[key].setEnabled(False)
 
     def _show_error(self, error: Exception) -> None:
         if isinstance(error, ApplicationError):
@@ -923,7 +1127,10 @@ class _DesktopWindow:
         self._executor.shutdown(wait=False, cancel_futures=True)
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(
+    application_factory: Callable[[Path, str | None], JobApplication],
+    argv: list[str] | None = None,
+) -> int:
     args = _parser().parse_args(argv)
     try:
         qt_core = importlib.import_module("PySide6.QtCore")
@@ -937,7 +1144,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
     try:
-        application = build_job_application(args.project_root, args.environment)
+        application = application_factory(args.project_root, args.environment)
     except ApplicationError as error:
         print(f"{error.safe_message} ({error.code})", file=sys.stderr)
         return 2
@@ -948,7 +1155,3 @@ def main(argv: list[str] | None = None) -> int:
     qt_application.aboutToQuit.connect(view_model.close)
     desktop.window.show()
     return int(qt_application.exec())
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

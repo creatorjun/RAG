@@ -246,6 +246,18 @@
 - 재시도 횟수와 다음 실행 시각 계산
 - 고아 `RUNNING` 작업 회수
 
+#### 실행 계약과 공통 정책
+
+- `application.runtime`은 `Application`, `JobApplication`, `JobWorkerApplication`과 읽기 전용
+  런타임 DTO를 정의한다. Presentation에는 구체 `LoadedSettings`, SQLite 저장소,
+  `SystemClock`, 취소 token을 노출하지 않는다.
+- `DocumentJobCancellationService`는 GUI 취소 요청, Worker SIGTERM 확인, stage 경계 취소가
+  공유하는 멱등 상태 전이 정책을 소유한다. 독립 유스케이스끼리 서로 생성하거나 상속하지 않는다.
+- `CompletionNotificationStatusService`는 결과 게시 상태·사용자 설정·영수증을 한 번 평가하고
+  조회와 전달 유스케이스에 동일한 판정을 제공한다.
+- Worker hard-stop은 `WorkerTerminationPort`로 노출하며 SIGKILL timer 구현은 Infrastructure에
+  격리한다.
+
 ## 4. Infrastructure 계층
 
 ### 4.1 소스 어댑터
@@ -398,6 +410,8 @@ prepare/compare/finalize`, `document plan/integrate`, `job create/list/status/ev
 
 GUI는 파일 시스템·SQLite·Hugging Face·MLX를 직접 호출하지 않고 CLI와 같은 Application
 유스케이스를 사용한다. 화면별 상세 계약은 [desktop-gui.md](desktop-gui.md)를 따른다.
+ViewModel은 `JobApplication.runtime`의 checkpoint 표시 경로와 취소 유예 DTO만 읽으며 구체
+설정 객체를 탐색하지 않는다.
 
 `ModelCatalogPort`는 로컬 cache 탐색, 명시적 원격 검색과 정확한 선택 검증을 분리한다.
 `HuggingFaceModelCatalog`만 `huggingface_hub`를 import하며 GUI는 `BrowseLocalModels`,
@@ -410,6 +424,25 @@ volume 사전 검사, 단일 active download, thread-safe 취소와 throttle된 
 반환한다. ViewModel은 다운로드 ID만 생성하고 Widget은 Application callback을 Qt signal로
 main thread에 전달한다.
 
+`PosixRunnerCancellation`은 `RunnerCancellationPort`를 구현한다. mutable runner lease에서
+`RUNNING` PID만 읽고, 그 PID가 launcher가 만든 독립 process group leader일 때만 `SIGTERM`을
+보낸다. Worker의 `ThreadCancellationToken`은 단계 경계와 MLX 생성 토큰 경계에서 공유되며,
+`WorkerTerminationGuard`가 설정된 유예 뒤 자기 process group만 강제 종료한다. 제어 plane은
+MLX 모듈을 import하거나 모델 객체를 직접 취소하지 않는다.
+
+`LocalDocumentJobStages`는 stage 진행과 체크포인트 복구만 담당한다. 모델·구조화 생성기,
+source, chunker, workspace, digest 구현은 내부에서 선택하지 않고 bootstrap이 전달한 포트
+factory를 사용한다.
+
+`FilesystemDocumentJobResultReader`는 `DocumentJobResultReaderPort`를 구현한다. Job definition에
+저장된 output root를 기준으로 최종 문서, 품질 JSON, 비교 JSON·Markdown, 합성 JSON을 열고
+경로·schema·건수·SHA-256을 검증한다. GUI에는 검증된 절대 경로와 coverage 집계만 반환한다.
+
+`FilesystemCompletionNotificationRepository`는 Job별 파일 lock 아래 publication fingerprint를
+`CLAIMED`로 먼저 기록해 Worker와 GUI의 동시 알림을 직렬화한다. `MacOsSystemNotifier`는 정적
+AppleScript와 제한된 환경 변수만 사용하며, 결과를 `DELIVERED` 또는 `FAILED` 영수증으로 닫는다.
+알림 실패는 이미 commit된 문서 Job을 실패로 되돌리지 않는다.
+
 ## 6. Bootstrap과 의존성 조립
 
 부트스트랩 순서는 고정한다.
@@ -421,8 +454,9 @@ main thread에 전달한다.
 5. 저장소와 CAS 어댑터 생성
 6. disabled 또는 Tavily 검색 어댑터 선택
 7. 리소스 스케줄러와 워커 팩토리 생성
-8. 유스케이스 생성
-9. CLI 또는 API 프레젠테이션 시작
+8. 동적 Job stage용 source·workspace·model·구조화 생성기 factory 생성
+9. 유스케이스와 Application 실행 계약 생성
+10. factory를 주입해 CLI·GUI·Worker 프레젠테이션 시작
 
 부트스트랩 실패는 어떤 워커도 생성하기 전에 종료한다. 부분 생성된 리소스는 생성 역순으로 닫는다.
 

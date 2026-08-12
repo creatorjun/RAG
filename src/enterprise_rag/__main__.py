@@ -1,4 +1,4 @@
 # src/enterprise_rag/__main__.py
-from enterprise_rag.presentation.cli import main
+from enterprise_rag.bootstrap import cli_main
 
-raise SystemExit(main())
+raise SystemExit(cli_main())
