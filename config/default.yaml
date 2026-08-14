@@ -69,3 +69,5 @@ logging:
   format: jsonl
   include_source_text: false
   include_model_output: false
+  maximum_file_bytes: 104857600
+  retained_files: 30

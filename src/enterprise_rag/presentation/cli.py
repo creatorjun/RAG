@@ -4,7 +4,9 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
 import sys
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import asdict
 from pathlib import Path
@@ -22,6 +24,8 @@ from enterprise_rag.application.runtime import (
     JobApplication,
 )
 from enterprise_rag.domain.errors import ApplicationError
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -149,6 +153,16 @@ def _print_integration_progress(value: IntegrationProgress) -> None:
         file=sys.stderr,
         flush=True,
     )
+    LOGGER.info(
+        "document_integration_progress",
+        extra={
+            "stage": value.stage,
+            "percentage": value.percentage,
+            "completed": value.completed,
+            "total": value.total,
+            "counter_name": value.counter_name,
+        },
+    )
 
 
 async def _execute(application: Application, args: argparse.Namespace) -> dict[str, object]:
@@ -244,16 +258,38 @@ def main(
     argv: Sequence[str] | None = None,
 ) -> int:
     args = _build_parser().parse_args(argv)
+    started_at = time.monotonic()
+    subcommand = getattr(args, f"{args.command}_command", None)
     try:
         if args.command == "job":
             with job_application_factory(
                 args.project_root, args.environment
             ) as job_application:
+                LOGGER.info(
+                    "command_started",
+                    extra={"command": args.command, "subcommand": subcommand},
+                )
                 result = asyncio.run(_execute_job(job_application, args))
         else:
             with application_factory(args.project_root, args.environment) as application:
+                LOGGER.info(
+                    "command_started",
+                    extra={"command": args.command, "subcommand": subcommand},
+                )
                 result = asyncio.run(_execute(application, args))
     except ApplicationError as error:
+        LOGGER.error(
+            "command_failed",
+            extra={
+                "command": args.command,
+                "subcommand": subcommand,
+                "error_code": error.code,
+                "error_category": error.category.value,
+                "retryable": error.retryable,
+                "duration_ms": round((time.monotonic() - started_at) * 1000),
+            },
+            exc_info=True,
+        )
         payload = {
             "code": error.code,
             "category": error.category.value,
@@ -263,6 +299,14 @@ def main(
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True), file=sys.stderr)
         return 2
     except Exception:
+        LOGGER.exception(
+            "command_crashed",
+            extra={
+                "command": args.command,
+                "subcommand": subcommand,
+                "duration_ms": round((time.monotonic() - started_at) * 1000),
+            },
+        )
         payload = {
             "code": "INTERNAL",
             "category": "INTERNAL",
@@ -271,5 +315,13 @@ def main(
         }
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True), file=sys.stderr)
         return 1
+    LOGGER.info(
+        "command_completed",
+        extra={
+            "command": args.command,
+            "subcommand": subcommand,
+            "duration_ms": round((time.monotonic() - started_at) * 1000),
+        },
+    )
     print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
     return 0

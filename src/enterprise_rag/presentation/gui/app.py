@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import logging
 import sys
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -32,6 +33,8 @@ from enterprise_rag.application.runtime import JobApplication
 from enterprise_rag.domain.errors import ApplicationError, ErrorCategory
 from enterprise_rag.domain.jobs import DocumentJobState
 from enterprise_rag.presentation.gui.view_model import DesktopViewModel
+
+LOGGER = logging.getLogger(__name__)
 
 _FIXED_POLICY_PREVIEW = """고정 정책(편집 불가)
 • 원문과 모델 입력은 비신뢰 데이터로 취급
@@ -2085,6 +2088,18 @@ class _DesktopWindow:
 
     def _show_error(self, error: Exception) -> None:
         message, guidance, code = _error_notice(error)
+        log_method = LOGGER.warning if isinstance(error, ApplicationError) else LOGGER.error
+        log_method(
+            "gui_operation_failed",
+            extra={
+                "error_code": code,
+                "error_type": type(error).__name__,
+                "error_category": (
+                    error.category.value if isinstance(error, ApplicationError) else "LOCAL"
+                ),
+            },
+            exc_info=(type(error), error, error.__traceback__),
+        )
         self._active_error_code = code
         self._show_feedback(
             self._app_feedback,
@@ -2191,13 +2206,61 @@ def main(
     try:
         application = application_factory(args.project_root, args.environment)
     except ApplicationError as error:
+        LOGGER.error(
+            "gui_startup_failed",
+            extra={
+                "error_code": error.code,
+                "error_category": error.category.value,
+            },
+            exc_info=True,
+        )
         print(f"{error.safe_message} ({error.code})", file=sys.stderr)
         return 2
-    qt_application = qt_widgets.QApplication(sys.argv[:1])
-    _configure_qt_theme(qt_gui, qt_widgets, qt_application)
-    view_model = DesktopViewModel(application)
-    desktop = _DesktopWindow(qt_core, qt_gui, qt_widgets, view_model)
-    qt_application.aboutToQuit.connect(desktop.close)
-    qt_application.aboutToQuit.connect(view_model.close)
-    desktop.window.show()
-    return int(qt_application.exec())
+    except Exception:
+        LOGGER.exception("gui_startup_crashed")
+        print("처리되지 않은 내부 오류가 발생했습니다.", file=sys.stderr)
+        return 1
+    LOGGER.info(
+        "gui_started",
+        extra={
+            "environment": args.environment,
+            "project_root": str(args.project_root.expanduser().resolve(strict=False)),
+        },
+    )
+    try:
+        qt_application = qt_widgets.QApplication(sys.argv[:1])
+        _configure_qt_theme(qt_gui, qt_widgets, qt_application)
+        view_model = DesktopViewModel(application)
+        desktop = _DesktopWindow(qt_core, qt_gui, qt_widgets, view_model)
+        qt_application.aboutToQuit.connect(desktop.close)
+        qt_application.aboutToQuit.connect(view_model.close)
+        desktop.window.show()
+    except Exception:
+        LOGGER.exception("gui_initialization_crashed")
+        application.close()
+        print("처리되지 않은 내부 오류가 발생했습니다.", file=sys.stderr)
+        return 1
+    previous_exception_hook = sys.excepthook
+
+    def log_unhandled_exception(
+        exception_type: type[BaseException],
+        exception: BaseException,
+        traceback: Any,
+    ) -> None:
+        LOGGER.critical(
+            "gui_unhandled_exception",
+            exc_info=(exception_type, exception, traceback),
+        )
+        previous_exception_hook(exception_type, exception, traceback)
+
+    sys.excepthook = log_unhandled_exception
+    try:
+        try:
+            exit_code = int(qt_application.exec())
+        except Exception:
+            LOGGER.exception("gui_event_loop_crashed")
+            return 1
+    finally:
+        sys.excepthook = previous_exception_hook
+    LOGGER.info("gui_stopped", extra={"exit_code": exit_code})
+    return exit_code

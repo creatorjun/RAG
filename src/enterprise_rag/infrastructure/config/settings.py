@@ -141,6 +141,8 @@ class LoggingSettings(_StrictModel):
     format: Literal["jsonl"] = "jsonl"
     include_source_text: bool = False
     include_model_output: bool = False
+    maximum_file_bytes: int = Field(default=100 * 1024 * 1024, ge=1024)
+    retained_files: int = Field(default=30, ge=1, le=100)
 
     @model_validator(mode="after")
     def reject_sensitive_logging(self) -> LoggingSettings:

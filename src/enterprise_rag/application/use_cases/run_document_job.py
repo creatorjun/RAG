@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import logging
+import time
+
 from enterprise_rag.application.dto.jobs import DocumentJobDto
 from enterprise_rag.application.dto.progress import ProgressEventDto
 from enterprise_rag.application.ports.cancellation import CancellationTokenPort
@@ -11,6 +14,8 @@ from enterprise_rag.application.services.document_job_cancellation import (
 )
 from enterprise_rag.domain.errors import ApplicationError, ErrorCategory, revision_error
 from enterprise_rag.domain.jobs import DocumentJob, DocumentJobState
+
+LOGGER = logging.getLogger(__name__)
 
 _ACTIVE_FLOW = (
     DocumentJobState.INSPECTING,
@@ -47,7 +52,15 @@ class RunDocumentJob:
         job = await self._jobs.get(job_id)
         if job is None:
             raise revision_error("JOB_NOT_FOUND", {"job_id": job_id})
+        LOGGER.info(
+            "document_job_execution_started",
+            extra={"job_id": job_id, "job_state": job.state.value},
+        )
         if job.state.terminal:
+            LOGGER.info(
+                "document_job_already_terminal",
+                extra={"job_id": job_id, "job_state": job.state.value},
+            )
             return DocumentJobDto.from_domain(job)
         cancelled = await self._cancel_if_requested(job_id, job)
         if cancelled is not None:
@@ -60,6 +73,15 @@ class RunDocumentJob:
             if events and events[-1].sequence == job.last_event_sequence:
                 last_event = events[-1]
         start_index = self._start_index(job.state, None if last_event is None else last_event.stage)
+        LOGGER.info(
+            "document_job_pipeline_resolved",
+            extra={
+                "job_id": job_id,
+                "job_state": job.state.value,
+                "start_stage_index": start_index,
+                "stage_count": len(self._stages),
+            },
+        )
         for index in range(start_index, len(self._stages)):
             stage = self._stages[index]
             current = await self._jobs.get(job_id)
@@ -71,14 +93,43 @@ class RunDocumentJob:
             job = current
             if job.state is not stage.state:
                 job = await self._jobs.transition(job_id, job.state, stage.state)
+            stage_started_at = time.monotonic()
+            LOGGER.info(
+                "document_job_stage_started",
+                extra={
+                    "job_id": job_id,
+                    "stage": stage.state.value,
+                    "stage_index": index,
+                    "stage_count": len(self._stages),
+                },
+            )
             try:
                 result = await stage.execute(job_id)
             except ApplicationError as error:
+                LOGGER.error(
+                    "document_job_stage_failed",
+                    extra={
+                        "job_id": job_id,
+                        "stage": stage.state.value,
+                        "error_code": error.code,
+                        "error_category": error.category.value,
+                        "duration_ms": round((time.monotonic() - stage_started_at) * 1000),
+                    },
+                    exc_info=True,
+                )
                 if error.category is ErrorCategory.CANCELLED:
                     return await self._confirm_cancellation(job_id)
                 await self._mark_failed(job_id, stage.state)
                 raise
             except Exception as error:
+                LOGGER.exception(
+                    "document_job_stage_crashed",
+                    extra={
+                        "job_id": job_id,
+                        "stage": stage.state.value,
+                        "duration_ms": round((time.monotonic() - stage_started_at) * 1000),
+                    },
+                )
                 await self._mark_failed(job_id, stage.state)
                 raise revision_error("IO_FAILURE", {"job_id": job_id}) from error
             current = await self._jobs.get(job_id)
@@ -104,6 +155,20 @@ class RunDocumentJob:
             )
             await self._events.publish(event)
             job = job.record_progress(sequence, event.percentage)
+            LOGGER.info(
+                "document_job_stage_completed",
+                extra={
+                    "job_id": job_id,
+                    "stage": stage.state.value,
+                    "stage_index": index,
+                    "stage_count": len(self._stages),
+                    "percentage": event.percentage,
+                    "completed": result.completed,
+                    "total": result.total,
+                    "counter_name": result.counter_name,
+                    "duration_ms": round((time.monotonic() - stage_started_at) * 1000),
+                },
+            )
             if result.needs_attention:
                 if stage.state not in {
                     DocumentJobState.VALIDATING_TASKS,
@@ -116,11 +181,23 @@ class RunDocumentJob:
                     stage.state,
                     DocumentJobState.NEEDS_ATTENTION,
                 )
+                LOGGER.warning(
+                    "document_job_needs_attention",
+                    extra={"job_id": job_id, "stage": stage.state.value},
+                )
                 return DocumentJobDto.from_domain(attention)
         completed = await self._jobs.transition(
             job_id,
             DocumentJobState.PUBLISHING,
             DocumentJobState.COMPLETED,
+        )
+        LOGGER.info(
+            "document_job_completed",
+            extra={
+                "job_id": job_id,
+                "last_event_sequence": completed.last_event_sequence,
+                "last_percentage": completed.last_percentage,
+            },
         )
         return DocumentJobDto.from_domain(completed)
 
@@ -134,6 +211,10 @@ class RunDocumentJob:
         )
         if not requested:
             return None
+        LOGGER.info(
+            "document_job_cancellation_confirming",
+            extra={"job_id": job_id, "job_state": job.state.value},
+        )
         return await self._confirm_cancellation(job_id)
 
     async def _confirm_cancellation(self, job_id: str) -> DocumentJobDto:

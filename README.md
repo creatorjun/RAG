@@ -130,4 +130,19 @@ rag job cancel --job-id <job_id>
 오프라인 모드에서는 선택한 Hugging Face commit이 로컬 캐시에 있어야 하며, 없으면
 네트워크를 시도하지 않고 작업을 안전하게 실패 처리합니다.
 
+## 실행 로그
+
+CLI, GUI, Job Worker의 실행·단계 진행·오류는 `var/logs/enterprise-rag.jsonl`에 상세한
+JSONL로 함께 기록됩니다. 각 레코드에는 UTC 시각, 컴포넌트, 프로세스·스레드, 호출 위치,
+Job·단계 메타데이터와 예외 스택이 포함됩니다. 원문, 모델 출력, 프롬프트와 인증 관련 필드는
+기록하지 않거나 `[REDACTED]`로 마스킹합니다.
+
+```bash
+tail -f var/logs/enterprise-rag.jsonl
+RAG_LOG_LEVEL=DEBUG rag doctor
+```
+
+기본 회전 크기는 100MiB이고 백업 30개를 보존합니다. `config/local.yaml`의
+`logging.maximum_file_bytes`, `logging.retained_files`로 조정할 수 있습니다.
+
 상세 설계는 [문서 인덱스](docs/README.md)와 [구현 계획](IMPLEMENTATION_PLAN.md)을 기준으로 합니다.

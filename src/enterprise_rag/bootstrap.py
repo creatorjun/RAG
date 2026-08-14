@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import logging
 from pathlib import Path
 
 from enterprise_rag.application.dto.desktop_settings import DesktopSettingsDto
@@ -68,7 +69,7 @@ from enterprise_rag.infrastructure.clock.system import SystemClock, UuidIdGenera
 from enterprise_rag.infrastructure.config.filesystem_desktop_settings_repository import (
     FilesystemDesktopSettingsRepository,
 )
-from enterprise_rag.infrastructure.config.settings import SettingsLoader
+from enterprise_rag.infrastructure.config.settings import LoadedSettings, SettingsLoader
 from enterprise_rag.infrastructure.jobs.filesystem_claim_draft_repository import (
     FilesystemClaimDraftRepository,
 )
@@ -121,6 +122,7 @@ from enterprise_rag.infrastructure.jobs.thread_cancellation import (
     ThreadCancellationToken,
 )
 from enterprise_rag.infrastructure.jobs.worker_termination import WorkerTerminationGuard
+from enterprise_rag.infrastructure.logging import configure_logging
 from enterprise_rag.infrastructure.models.huggingface_model_catalog import (
     HuggingFaceModelCatalog,
 )
@@ -162,9 +164,33 @@ from enterprise_rag.infrastructure.workspace.folder_revision_workspace import (
 )
 from enterprise_rag.infrastructure.workspace.folder_tree_comparator import FolderTreeComparator
 
+LOGGER = logging.getLogger(__name__)
+
+
+def _load_configuration(
+    project_root: Path,
+    environment: str | None,
+    component: str,
+) -> LoadedSettings:
+    configuration = SettingsLoader(project_root).load(environment)
+    log_path = configure_logging(
+        configuration.paths.logs,
+        configuration.settings.logging,
+        component,
+    )
+    LOGGER.info(
+        "application_configuration_loaded",
+        extra={
+            "environment": configuration.settings.environment,
+            "project_root": str(configuration.paths.project_root),
+            "log_path": str(log_path),
+        },
+    )
+    return configuration
+
 
 def build_application(project_root: Path, environment: str | None = None) -> Application:
-    configuration = SettingsLoader(project_root).load(environment)
+    configuration = _load_configuration(project_root, environment, "cli")
     settings = configuration.settings
     clock = SystemClock()
     id_generator = UuidIdGenerator()
@@ -259,8 +285,10 @@ def build_application(project_root: Path, environment: str | None = None) -> App
 def build_job_application(
     project_root: Path,
     environment: str | None = None,
+    *,
+    logging_component: str = "job-control",
 ) -> JobApplication:
-    configuration = SettingsLoader(project_root).load(environment)
+    configuration = _load_configuration(project_root, environment, logging_component)
     clock = SystemClock()
     repository = SqliteDocumentJobRepository(configuration.paths.database, clock)
     artifacts = FilesystemJobArtifactRepository(configuration.paths.var_root)
@@ -393,7 +421,7 @@ def build_job_worker_application(
     project_root: Path,
     environment: str | None = None,
 ) -> JobWorkerApplication:
-    configuration = SettingsLoader(project_root).load(environment)
+    configuration = _load_configuration(project_root, environment, "job-worker")
     settings = configuration.settings
     clock = SystemClock()
     ids = UuidIdGenerator()
@@ -510,7 +538,17 @@ def cli_main(argv: list[str] | None = None) -> int:
 def gui_main(argv: list[str] | None = None) -> int:
     from enterprise_rag.presentation.gui.app import main
 
-    return main(build_job_application, argv)
+    def build_gui_application(
+        project_root: Path,
+        environment: str | None,
+    ) -> JobApplication:
+        return build_job_application(
+            project_root,
+            environment,
+            logging_component="gui",
+        )
+
+    return main(build_gui_application, argv)
 
 
 def job_worker_main(argv: list[str] | None = None) -> int:

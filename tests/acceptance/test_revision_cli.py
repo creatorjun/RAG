@@ -17,6 +17,7 @@ from enterprise_rag.application.dto.revision import (
 )
 from enterprise_rag.bootstrap import build_application, build_job_application
 from enterprise_rag.domain.revision import RevisionRunState
+from enterprise_rag.infrastructure.logging import shutdown_logging
 from enterprise_rag.presentation.cli import main
 
 
@@ -34,6 +35,7 @@ class RevisionCliTest(unittest.TestCase):
         self.job_application_factory = build_job_application
 
     def tearDown(self) -> None:
+        shutdown_logging()
         self._temporary.cleanup()
 
     def _execute(self, *arguments: str) -> tuple[int, dict[str, object], str]:
@@ -58,6 +60,12 @@ class RevisionCliTest(unittest.TestCase):
         self.assertEqual(payload["status"], "ok")
         self.assertEqual(payload["environment"], "development")
         self.assertFalse(payload["web_enabled"])
+        log_path = self.project_root / "var" / "logs" / "enterprise-rag.jsonl"
+        records = [
+            json.loads(line)
+            for line in log_path.read_text(encoding="utf-8").splitlines()
+        ]
+        self.assertIn("command_completed", {record["message"] for record in records})
 
     def test_revision_commands_cover_four_states_and_finalization(self) -> None:
         (self.before_root / "modified.md").write_text("before\n", encoding="utf-8")

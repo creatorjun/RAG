@@ -3,9 +3,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
 import os
 import signal
 import sys
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -14,6 +16,8 @@ from enterprise_rag.application.dto.runner import RunnerLifecycle
 from enterprise_rag.application.runtime import JobWorkerApplication
 from enterprise_rag.domain.errors import ApplicationError
 from enterprise_rag.domain.jobs import DocumentJobState
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -44,6 +48,10 @@ async def _heartbeat(
             pid,
             application.clock.now(),
         )
+        LOGGER.debug(
+            "job_worker_heartbeat",
+            extra={"job_id": job_id, "worker_process_id": pid},
+        )
 
 
 async def _run_owned_job(
@@ -60,6 +68,10 @@ async def _run_owned_job(
 
     def request_cancellation() -> None:
         nonlocal confirmation_task
+        LOGGER.info(
+            "job_worker_cancellation_requested",
+            extra={"job_id": job_id, "worker_process_id": pid},
+        )
         termination.request()
         if confirmation_task is None:
             confirmation_task = loop.create_task(
@@ -73,6 +85,10 @@ async def _run_owned_job(
     except (NotImplementedError, RuntimeError):
         signal_registered = False
     await leases.claim(job_id, runner_token, pid, clock.now())
+    LOGGER.info(
+        "job_worker_lease_claimed",
+        extra={"job_id": job_id, "worker_process_id": pid},
+    )
     run_task = asyncio.create_task(application.run_document_job.execute(job_id))
     heartbeat_task = asyncio.create_task(
         _heartbeat(application, job_id, runner_token, pid)
@@ -94,7 +110,10 @@ async def _run_owned_job(
                     # Notification delivery is an auxiliary side effect. The durable
                     # publication remains successful and the GUI can retry an unclaimed
                     # receipt without changing the Job result.
-                    pass
+                    LOGGER.exception(
+                        "completion_notification_failed",
+                        extra={"job_id": job_id},
+                    )
         finally:
             if not heartbeat_task.done():
                 heartbeat_task.cancel()
@@ -144,6 +163,7 @@ def main(
     argv: list[str] | None = None,
 ) -> int:
     args = _parser().parse_args(argv)
+    started_at = time.monotonic()
     try:
         os.fstat(args.lock_fd)
     except OSError:
@@ -154,10 +174,28 @@ def main(
             args.project_root,
             args.environment,
         ) as application:
+            LOGGER.info(
+                "job_worker_started",
+                extra={
+                    "job_id": args.job_id,
+                    "worker_process_id": os.getpid(),
+                    "environment": args.environment,
+                },
+            )
             result = asyncio.run(
                 _run_owned_job(application, args.job_id, args.runner_token)
             )
     except ApplicationError as error:
+        LOGGER.error(
+            "job_worker_failed",
+            extra={
+                "job_id": args.job_id,
+                "error_code": error.code,
+                "error_category": error.category.value,
+                "duration_ms": round((time.monotonic() - started_at) * 1000),
+            },
+            exc_info=True,
+        )
         print(
             json.dumps(
                 {
@@ -173,8 +211,23 @@ def main(
         )
         return 2
     except Exception:
+        LOGGER.exception(
+            "job_worker_crashed",
+            extra={
+                "job_id": args.job_id,
+                "duration_ms": round((time.monotonic() - started_at) * 1000),
+            },
+        )
         print("unhandled document job worker failure", file=sys.stderr)
         return 1
+    LOGGER.info(
+        "job_worker_completed",
+        extra={
+            "job_id": args.job_id,
+            "job_state": result.state.value,
+            "duration_ms": round((time.monotonic() - started_at) * 1000),
+        },
+    )
     print(
         json.dumps(
             {

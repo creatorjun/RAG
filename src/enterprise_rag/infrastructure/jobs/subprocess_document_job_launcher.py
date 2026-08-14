@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import fcntl
+import logging
 import os
 import subprocess
 import sys
@@ -22,6 +23,8 @@ from enterprise_rag.infrastructure.workspace.path_security import (
     is_within,
 )
 
+LOGGER = logging.getLogger(__name__)
+
 
 class SubprocessDocumentJobLauncher:
     def __init__(
@@ -41,6 +44,7 @@ class SubprocessDocumentJobLauncher:
         self._ids = ids
 
     async def launch(self, job_id: str) -> int:
+        LOGGER.info("job_worker_launch_requested", extra={"job_id": job_id})
         lock_stream = await asyncio.to_thread(self._acquire, job_id)
         runner_token = f"runner-{self._ids.new_id()}"
         launch_started = False
@@ -138,9 +142,24 @@ class SubprocessDocumentJobLauncher:
         )
         with suppress(RuntimeError):
             reaper.start()
+        LOGGER.info(
+            "job_worker_process_launched",
+            extra={
+                "job_id": job_id,
+                "worker_process_id": process.pid,
+                "runner_output_path": str(log_path),
+            },
+        )
         return int(process.pid)
 
     @staticmethod
     def _reap(process: subprocess.Popen[bytes]) -> None:
         with suppress(OSError, subprocess.SubprocessError):
-            process.wait()
+            exit_code = process.wait()
+            LOGGER.info(
+                "job_worker_process_reaped",
+                extra={
+                    "worker_process_id": process.pid,
+                    "worker_exit_code": exit_code,
+                },
+            )

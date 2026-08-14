@@ -229,6 +229,24 @@ Coordinator는 새 작업 수락을 중지하고, 실행 중 작업에 취소를
 | `recovery` | 복구·검증 외 작업 금지 |
 | `stopping` | 안전 종료 중 |
 
+### 7.3 구조화 로그
+
+모든 실행 경로는 `<var_root>/logs/enterprise-rag.jsonl`에 JSONL을 기록한다. CLI와 GUI,
+별도 Worker 프로세스는 같은 파일 잠금을 사용하므로 동시 기록과 회전 중에도 한 줄 단위 JSON이
+유지된다. 기본값은 파일당 100MiB, 회전 백업 30개이며 `logging.maximum_file_bytes`와
+`logging.retained_files`에서 조정한다.
+
+```bash
+tail -f var/logs/enterprise-rag.jsonl
+jq 'select(.level == "ERROR" or .level == "CRITICAL")' \
+  var/logs/enterprise-rag.jsonl
+jq 'select(.job_id == "<job-id>")' var/logs/enterprise-rag.jsonl
+```
+
+운영에서는 `INFO`를 기본으로 사용하고 일시적인 진단에만 `RAG_LOG_LEVEL=DEBUG`를 적용한다.
+로그와 잠금 파일은 소유자만 읽고 쓸 수 있게 생성된다. 원문, 모델 출력, 프롬프트, 인증 토큰은
+로그 컨텍스트로 전달하지 않으며 알려진 민감 필드는 `[REDACTED]`로 직렬화된다.
+
 ## 8. 백업
 
 ### 8.1 백업 전 조건
