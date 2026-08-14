@@ -103,6 +103,91 @@ class BuildClaimLedgerTest(unittest.TestCase):
             tuple(sorted((first_evidence.evidence_id, second_evidence.evidence_id))),
         )
 
+    def test_conservatively_collapses_semantic_equivalents_across_evidence(self) -> None:
+        first_evidence = _evidence("a")
+        second_evidence = _evidence("d")
+        evidence = EvidenceBundleDto((first_evidence, second_evidence), 1, 2)
+        first = ClaimDraftDto(
+            "draft:1",
+            ClaimKind.COMMAND,
+            "서비스 재시작 명령을 실행한다.",
+            (first_evidence.evidence_id,),
+            commands=("systemctl restart example",),
+        )
+        second = ClaimDraftDto(
+            "draft:2",
+            ClaimKind.COMMAND,
+            "example 서비스는 systemctl로 다시 시작한다.",
+            (second_evidence.evidence_id,),
+            commands=first.commands,
+        )
+        relation = ClaimRelationDraftDto(
+            first.draft_id,
+            second.draft_id,
+            ClaimRelationType.SEMANTIC_EQUIVALENT,
+        )
+
+        ledger = BuildClaimLedger().execute(evidence, (first, second), (relation,))
+
+        self.assertEqual(len(ledger.claims), 1)
+        self.assertEqual(ledger.relations, ())
+        self.assertEqual(
+            ledger.claims[0].evidence_ids,
+            tuple(sorted((first_evidence.evidence_id, second_evidence.evidence_id))),
+        )
+
+    def test_keeps_semantic_relation_when_safety_metadata_differs(self) -> None:
+        evidence = EvidenceBundleDto((_evidence(),), 1, 1)
+        first = ClaimDraftDto(
+            "draft:1",
+            ClaimKind.WARNING,
+            "서비스를 재시작하지 않는다.",
+            (evidence.items[0].evidence_id,),
+            warnings=("운영 중 금지",),
+        )
+        second = ClaimDraftDto(
+            "draft:2",
+            ClaimKind.WARNING,
+            "서비스 재시작은 금지된다.",
+            (evidence.items[0].evidence_id,),
+            warnings=("점검 중 금지",),
+        )
+        relation = ClaimRelationDraftDto(
+            first.draft_id,
+            second.draft_id,
+            ClaimRelationType.SEMANTIC_EQUIVALENT,
+        )
+
+        ledger = BuildClaimLedger().execute(evidence, (first, second), (relation,))
+
+        self.assertEqual(len(ledger.claims), 2)
+        self.assertEqual(len(ledger.relations), 1)
+
+    def test_never_collapses_semantic_relation_with_different_numbers(self) -> None:
+        evidence = EvidenceBundleDto((_evidence(),), 1, 1)
+        first = ClaimDraftDto(
+            "draft:1",
+            ClaimKind.FACT,
+            "서비스 포트는 8080이다.",
+            (evidence.items[0].evidence_id,),
+        )
+        second = ClaimDraftDto(
+            "draft:2",
+            ClaimKind.FACT,
+            "서비스 포트 값은 9090이다.",
+            (evidence.items[0].evidence_id,),
+        )
+        relation = ClaimRelationDraftDto(
+            first.draft_id,
+            second.draft_id,
+            ClaimRelationType.SEMANTIC_EQUIVALENT,
+        )
+
+        ledger = BuildClaimLedger().execute(evidence, (first, second), (relation,))
+
+        self.assertEqual(len(ledger.claims), 2)
+        self.assertEqual(len(ledger.relations), 1)
+
     def test_excludes_evidence_without_technical_claims_from_reviewed_coverage(self) -> None:
         technical = _evidence("a")
         irrelevant = _evidence("d")
@@ -130,16 +215,10 @@ class BuildClaimLedgerTest(unittest.TestCase):
             BuildClaimLedger().execute(evidence, (unknown,))
         self.assertEqual(captured.exception.code, "CLAIM_LEDGER_INVALID")
 
-        one = ClaimDraftDto(
-            "draft:1", ClaimKind.FACT, "one", (evidence.items[0].evidence_id,)
-        )
-        two = ClaimDraftDto(
-            "draft:2", ClaimKind.FACT, "two", (evidence.items[0].evidence_id,)
-        )
+        one = ClaimDraftDto("draft:1", ClaimKind.FACT, "one", (evidence.items[0].evidence_id,))
+        two = ClaimDraftDto("draft:2", ClaimKind.FACT, "two", (evidence.items[0].evidence_id,))
         relations = (
-            ClaimRelationDraftDto(
-                "draft:1", "draft:2", ClaimRelationType.COMPLEMENTARY
-            ),
+            ClaimRelationDraftDto("draft:1", "draft:2", ClaimRelationType.COMPLEMENTARY),
             ClaimRelationDraftDto("draft:1", "draft:2", ClaimRelationType.CONFLICT),
         )
         with self.assertRaises(ApplicationError) as captured:

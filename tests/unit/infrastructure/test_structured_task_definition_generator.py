@@ -4,9 +4,9 @@ import asyncio
 import json
 import unittest
 
-from enterprise_rag.application.dto.claims import ClaimDto, ClaimLedgerDto
+from enterprise_rag.application.dto.claims import ClaimDto, ClaimLedgerDto, ClaimRelationDto
 from enterprise_rag.application.dto.evidence import EvidenceBundleDto, EvidenceItemDto
-from enterprise_rag.domain.claims import ClaimKind
+from enterprise_rag.domain.claims import ClaimKind, ClaimRelationType
 from enterprise_rag.domain.errors import ApplicationError, revision_error
 from enterprise_rag.infrastructure.models.structured_task_definition_generator import (
     StructuredTaskDefinitionGenerator,
@@ -46,9 +46,7 @@ class _OverflowPlanningGenerator(_TextGenerator):
                         "task_id": "service-overview",
                         "title": "서비스 개요",
                         "objective": "서비스 사실 작성",
-                        "owned_claim_refs": [
-                            claim["claim_ref"] for claim in payload["claims"]
-                        ],
+                        "owned_claim_refs": [claim["claim_ref"] for claim in payload["claims"]],
                         "required_sections": ["개요"],
                         "depends_on_task_ids": [],
                     }
@@ -188,6 +186,36 @@ class StructuredTaskDefinitionGeneratorTest(unittest.TestCase):
             for prompt in text_generator.prompts
         ]
         self.assertEqual(batch_sizes, [60, 40, 20])
+
+    def test_relation_components_stay_in_the_same_planning_batch(self) -> None:
+        _, evidence = _fixture()
+        evidence_id = evidence.items[0].evidence_id
+        claims = tuple(
+            ClaimDto(
+                "claim:sha256:" + f"{index:064x}",
+                ClaimKind.FACT,
+                f"항목 {index:03d}",
+                (evidence_id,),
+            )
+            for index in range(45)
+        )
+        relation = ClaimRelationDto(
+            min(claims[0].claim_id, claims[-1].claim_id),
+            max(claims[0].claim_id, claims[-1].claim_id),
+            ClaimRelationType.COMPLEMENTARY,
+        )
+        ledger = ClaimLedgerDto(claims, (relation,), (evidence_id,))
+
+        batches = StructuredTaskDefinitionGenerator._claim_batches(ledger, evidence)
+
+        self.assertTrue(
+            any(
+                {claims[0].claim_id, claims[-1].claim_id}.issubset(
+                    {claim.claim_id for claim in batch}
+                )
+                for batch in batches
+            )
+        )
 
 
 if __name__ == "__main__":

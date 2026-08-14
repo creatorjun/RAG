@@ -49,8 +49,38 @@ class _OverflowThenEmptyGenerator(_TextGenerator):
         self.prompts.append(user_prompt)
         if len(self.prompts) == 1:
             raise revision_error("TOKEN_BUDGET_EXCEEDED")
+        return json.dumps({"relations": [], "completion_marker": "RELATIONS_COMPLETE"})
+
+
+class _TruncatedThenEmptyGenerator(_TextGenerator):
+    def __init__(self) -> None:
+        super().__init__("")
+        self.prompts: list[str] = []
+
+    async def generate(self, system_prompt, user_prompt, max_output_tokens):
+        self.prompts.append(user_prompt)
+        if len(self.prompts) <= 2:
+            return '{"completion_marker":"RELATIONS_COMPLETE","relations":[["C000001"'
+        return json.dumps({"relations": [], "completion_marker": "RELATIONS_COMPLETE"})
+
+
+class _OverflowUntilPairGenerator(_TextGenerator):
+    def __init__(self) -> None:
+        super().__init__("")
+        self.prompts: list[str] = []
+
+    async def generate(self, system_prompt, user_prompt, max_output_tokens):
+        self.prompts.append(user_prompt)
+        claims = StructuredClaimRelationGeneratorTest._task_data(user_prompt)["claims"]
+        if not isinstance(claims, list):
+            raise AssertionError("claims must be a list")
+        if len(claims) > 2:
+            raise revision_error("TOKEN_BUDGET_EXCEEDED")
         return json.dumps(
-            {"relations": [], "completion_marker": "RELATIONS_COMPLETE"}
+            {
+                "relations": [[claims[0]["claim_ref"], claims[1]["claim_ref"], "COMPLEMENTARY"]],
+                "completion_marker": "RELATIONS_COMPLETE",
+            }
         )
 
 
@@ -103,6 +133,22 @@ class StructuredClaimRelationGeneratorTest(unittest.TestCase):
         drafts, evidence = _fixture()
         response = json.dumps(
             {
+                "relations": [["C000001", "C000002", "CONFLICT"]],
+                "completion_marker": "RELATIONS_COMPLETE",
+            }
+        )
+        text_generator = _TextGenerator(response)
+        generator = StructuredClaimRelationGenerator(text_generator, 1024)
+        relations = asyncio.run(generator.generate(drafts, evidence, "서비스 운영 문서"))
+        self.assertEqual(relations[0].relation, ClaimRelationType.CONFLICT)
+        self.assertIn('"claim_ref": "C000001"', text_generator.user_prompt)
+        self.assertNotIn('"draft_id": "draft:one"', text_generator.user_prompt)
+        self.assertIn("[left_claim_ref, right_claim_ref, relation]", text_generator.user_prompt)
+
+    def test_accepts_legacy_object_relation_during_schema_transition(self) -> None:
+        drafts, evidence = _fixture()
+        response = json.dumps(
+            {
                 "relations": [
                     {
                         "left_claim_ref": "C000001",
@@ -113,14 +159,14 @@ class StructuredClaimRelationGeneratorTest(unittest.TestCase):
                 "completion_marker": "RELATIONS_COMPLETE",
             }
         )
-        text_generator = _TextGenerator(response)
-        generator = StructuredClaimRelationGenerator(text_generator, 1024)
+
         relations = asyncio.run(
-            generator.generate(drafts, evidence, "서비스 운영 문서")
+            StructuredClaimRelationGenerator(_TextGenerator(response), 1024).generate(
+                drafts, evidence, "서비스 운영 문서"
+            )
         )
+
         self.assertEqual(relations[0].relation, ClaimRelationType.CONFLICT)
-        self.assertIn('"claim_ref": "C000001"', text_generator.user_prompt)
-        self.assertNotIn('"draft_id": "draft:one"', text_generator.user_prompt)
 
     def test_rejects_unknown_claim_or_unrelated_output(self) -> None:
         drafts, evidence = _fixture()
@@ -143,9 +189,7 @@ class StructuredClaimRelationGeneratorTest(unittest.TestCase):
 
     def test_repairs_invalid_relation_output_once(self) -> None:
         drafts, evidence = _fixture()
-        valid = json.dumps(
-            {"relations": [], "completion_marker": "RELATIONS_COMPLETE"}
-        )
+        valid = json.dumps({"relations": [], "completion_marker": "RELATIONS_COMPLETE"})
         text_generator = _SequenceTextGenerator(["not-json", valid])
 
         relations = asyncio.run(
@@ -180,13 +224,100 @@ class StructuredClaimRelationGeneratorTest(unittest.TestCase):
         )
 
         self.assertEqual(relations, ())
-        batch_sizes = [
-            len(self._task_data(prompt)["claims"])
-            for prompt in text_generator.prompts
-        ]
-        self.assertEqual(batch_sizes[0], 60)
-        self.assertTrue(all(size <= 40 for size in batch_sizes[1:]))
+        batch_sizes = [len(self._task_data(prompt)["claims"]) for prompt in text_generator.prompts]
+        self.assertTrue(all(size <= 40 for size in batch_sizes))
+        self.assertLess(batch_sizes[1], batch_sizes[0])
         self.assertGreater(len(batch_sizes), 2)
+
+    def test_splits_a_batch_after_two_truncated_json_responses(self) -> None:
+        seed_drafts, evidence = _fixture()
+        drafts = tuple(
+            ClaimDraftDto(
+                f"draft:{index:03d}",
+                ClaimKind.FACT,
+                f"서비스 설정 항목 {index:03d}",
+                (seed_drafts[0].evidence_ids[0],),
+            )
+            for index in range(20)
+        )
+        text_generator = _TruncatedThenEmptyGenerator()
+
+        relations = asyncio.run(
+            StructuredClaimRelationGenerator(text_generator, 1024).generate(
+                drafts,
+                evidence,
+                "서비스 운영 문서",
+            )
+        )
+
+        self.assertEqual(relations, ())
+        batch_sizes = [len(self._task_data(prompt)["claims"]) for prompt in text_generator.prompts]
+        self.assertEqual(batch_sizes[:2], [20, 20])
+        self.assertTrue(any(size < 20 for size in batch_sizes[2:]))
+        self.assertTrue(any('"comparison_side": "LEFT"' in p for p in text_generator.prompts))
+
+    def test_recursive_split_preserves_every_pair_without_duplicates(self) -> None:
+        seed_drafts, evidence = _fixture()
+        drafts = tuple(
+            ClaimDraftDto(
+                f"draft:{index:03d}",
+                ClaimKind.FACT,
+                f"서비스 설정 항목 {index:03d}",
+                (seed_drafts[0].evidence_ids[0],),
+            )
+            for index in range(6)
+        )
+        text_generator = _OverflowUntilPairGenerator()
+
+        relations = asyncio.run(
+            StructuredClaimRelationGenerator(text_generator, 1024).generate(
+                drafts,
+                evidence,
+                "서비스 운영 문서",
+            )
+        )
+
+        pairs = {
+            frozenset((relation.left_draft_id, relation.right_draft_id)) for relation in relations
+        }
+        self.assertEqual(len(relations), 15)
+        self.assertEqual(len(pairs), 15)
+        self.assertTrue(any('"comparison_side": "LEFT"' in p for p in text_generator.prompts))
+
+    def test_candidate_blocks_compare_cross_file_paraphrases_beyond_windows(self) -> None:
+        seed_drafts, evidence = _fixture()
+        fillers = tuple(
+            ClaimDraftDto(
+                f"draft:filler:{index:03d}",
+                ClaimKind.FACT,
+                f"무관한 구성 값 항목 {index:03d}",
+                (seed_drafts[index % 2].evidence_ids[0],),
+            )
+            for index in range(90)
+        )
+        first = ClaimDraftDto(
+            "draft:target:first",
+            ClaimKind.COMMAND,
+            "alpha 절차에서 nebula-service 재시작 명령을 실행한다.",
+            (seed_drafts[0].evidence_ids[0],),
+        )
+        second = ClaimDraftDto(
+            "draft:target:second",
+            ClaimKind.COMMAND,
+            "zulu 단계는 nebula-service 명령으로 다시 시작한다.",
+            (seed_drafts[1].evidence_ids[0],),
+        )
+
+        batches = StructuredClaimRelationGenerator._relation_batches(
+            (*fillers, first, second), evidence
+        )
+
+        self.assertTrue(
+            any(
+                {first.draft_id, second.draft_id}.issubset({item.draft_id for item in batch})
+                for batch in batches
+            )
+        )
 
     @staticmethod
     def _task_data(prompt: str) -> dict[str, object]:

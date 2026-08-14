@@ -144,7 +144,36 @@ doctor는 production 데이터와 활성 세대를 변경하지 않고 별도 st
 
 ## 6. 일상 실행
 
-### 6.1 시작
+### 6.1 컨텍스트·출력 설정
+
+- `context_tokens`는 모델 manifest가 지원하고 장비 benchmark를 통과한 값만 사용한다.
+- `max_output_tokens`가 context 절반보다 크더라도 Worker의 실제 한 호출 예약은 context 절반으로
+  제한된다. 긴 최종 문서는 여러 검증된 shard를 합쳐 생성하므로 이 제한이 최종 문서 길이를
+  자르지 않는다.
+- context를 키워 오류를 숨기기 전에 GUI의 모델 stream에서 `TOKEN_BUDGET_EXCEEDED`, 완료 표식,
+  JSON schema 오류와 shard 호출 수를 확인한다.
+- 최소 Claim·section·Evidence 단위도 token budget을 넘으면 추가 system prompt와 Job instruction을
+  줄이거나 승인된 더 큰 context 모델을 선택한다. 원문 Evidence를 수동 요약해 대체하지 않는다.
+- 실패 Job은 `var/jobs/<job_id>`의 Evidence별 Claim, Task output, validation 체크포인트를 보존한다.
+  설정이나 pipeline fingerprint가 같을 때 재개하고, 달라지면 새 Job을 만든다.
+- `CLAIM_LEDGER_INVALID`가 relation stream의 동일 출력 길이에서 반복되면 JSON output truncation으로
+  분류한다. 현재 Worker는 compact relation tuple로 재요청하고 실패 batch만 내부·교차 pair로
+  재분할한다. 코드 업데이트 전 시작한 Worker에는 적용되지 않으므로 Worker 종료 후 실패 Job의
+  `파이프라인 시작`을 다시 눌러 저장된 Evidence별 Claim부터 재개한다.
+
+### 6.2 장문 품질 진단 순서
+
+1. Evidence bundle의 source structure 수와 Evidence 수가 같은지 확인
+2. Claim draft 체크포인트 수가 Evidence 수에 도달했는지 확인
+3. Claim Ledger에서 semantic equivalent 병합 뒤 Evidence 합집합 확인
+4. Coverage Matrix의 source Claim·Evidence 수와 covered 수 비교
+5. Task stream에서 shard별 `TASK_COMPLETE`와 compact ref schema 확인
+6. final validation의 Claim·Evidence·source coverage와 문서 SHA-256 확인
+
+호환 명령 `rag document integrate`는 완료 표식으로 잘림을 차단하지만 마지막 단일 장문 생성과
+lossy reduce를 사용한다. 대용량 운영 문서는 GUI/Job의 Evidence·Task 경로를 사용한다.
+
+### 6.3 시작
 
 ```text
 rag doctor --quick
@@ -161,7 +190,7 @@ rag run status --latest
 5. Coordinator ready
 6. 워커는 작업이 들어올 때 지연 시작
 
-### 6.2 증분 인제스천
+### 6.4 증분 인제스천
 
 ```text
 rag revision prepare --run-id <revision-run-id>
@@ -178,7 +207,7 @@ rag run status <run-id> --watch
 - 메모리 pressure 이벤트
 - 입력 매니페스트 파일 수와 before SHA-256 재검증
 
-### 6.3 검증과 합성
+### 6.5 검증과 합성
 
 ```text
 rag validate --source-run <run-id>
@@ -191,7 +220,7 @@ rag revision finalize --run-id <revision-run-id>
 
 게시 전 `citation coverage=1.0`, 미결 필수 승인 0, artifact manifest, before 해시 불변, comparison report 검증을 확인한다.
 
-### 6.4 안전 종료
+### 6.6 안전 종료
 
 ```text
 rag shutdown --grace-seconds 60

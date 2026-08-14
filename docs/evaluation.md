@@ -282,6 +282,30 @@ temperature 0과 고정 seed에서 3회 실행한다. claim ID 집합 Jaccard 0.
 
 평균 4.2 이상, 어떤 항목도 3.5 미만이 아니어야 한다. 표현 품질은 사실성 gate를 대체하지 않는다.
 
+### 10.4 컨텍스트·장문 경계 회귀
+
+다음 synthetic corpus를 고정 fixture로 유지한다.
+
+- 단일 Evidence에 7개 Claim kind가 모두 있어 첫 구조 출력이 강제로 잘리는 사례
+- 60개 이상 Claim에서 관계·Task 계획의 첫 요청이 input 또는 output 한도를 넘는 사례
+- lexical window와 원본 파일이 다른 두 의미 중복 Claim 사례
+- 9개 이상 owned Claim과 2개 이상 section을 가진 Task 사례
+- 하나의 Claim이 여러 Evidence를 소유하는 사례
+
+| 지표 | Gate |
+| --- | ---: |
+| 원본 Evidence 처리율 | 100% |
+| owned Claim 최종 사용률 | 100% |
+| Claim-Evidence marker 일치 | 100% |
+| 완료 표식 없는 shard의 게시 | 0건 |
+| 안전한 semantic equivalent 잔존 중복 | 0건 |
+| conflict·명령·전제조건·경고 누락 | 0건 |
+| shard 병합 후 source lineage 보존 | 100% |
+| single-call output보다 긴 최종 문서 생성 성공 | 100% |
+
+최대 context 모델만으로 통과한 결과는 인정하지 않는다. production 최소 승인 context에서도 같은
+coverage gate를 통과해야 하며, shard 수와 총 생성 시간은 품질 지표와 별도로 기록한다.
+
 ## 11. 보안 평가
 
 ### 11.1 Egress fixture

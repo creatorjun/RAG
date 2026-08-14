@@ -167,11 +167,20 @@ Track A 워커는 파싱과 임베딩 배치를 수행한다. 기본 수명은 �
 Track B 워커는 Qwen 전용이며 동시 생성 작업은 1개다. `ACCELERATOR_TRACK_B` 리스를 획득한 뒤에만 모델을 로드한다.
 
 - 입력 토큰 수를 런타임 호출 전에 재검증
+- 한 호출의 출력 예약은 context 절반 이하로 제한하고 aggregate 출력은 Task shard 병합으로 확장
 - 모든 생성 요청에 타임아웃과 취소 ID 부여
 - JSON 구조 출력은 스키마 검증 후 최대 1회 교정 재시도
+- 완료 표식·JSON·schema 실패는 가능한 최소 단위까지 Claim/section/Evidence 재귀 분할
+- prompt 내부 Claim·Evidence ID는 호출 한정 compact ref로 치환하고 parse 직후 원래 ID로 복원
+- shard 결과는 LLM 재요약 없이 코드가 병합하며 최종 전체 문서 재작성 금지
 - 작업 사이 프롬프트 상태 공유 금지
 - 비정상 종료 시 실행 중 작업은 `retryable_resource_failure`로 회수
 - 유휴 120초 후 종료를 기본값으로 사용
+
+컨텍스트 길이는 용량 상한일 뿐 품질 경계가 아니다. corpus 전체 coverage는 Evidence별 Claim
+추출로 보장하고, 관련 Claim은 relation component 단위로 계획한다. 긴 Task는 최대 8 owned
+Claim 단위로 선제 shard하며 최소 단위 실패는 내용을 줄여 통과시키지 않고 명시적으로 실패한다.
+세부 결정은 [ADR-0007](adr/0007-context-bounded-lossless-generation.md)을 따른다.
 
 ### 3.4 외부 웹 접근
 

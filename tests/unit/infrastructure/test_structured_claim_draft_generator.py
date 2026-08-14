@@ -40,6 +40,40 @@ class _SequenceTextGenerator(_TextGenerator):
         return next(self.responses)
 
 
+class _TruncatedThenPartitionedGenerator(_TextGenerator):
+    def __init__(self, evidence_id: str) -> None:
+        super().__init__("")
+        self.evidence_id = evidence_id
+        self.prompts: list[str] = []
+
+    async def generate(self, system_prompt, user_prompt, max_output_tokens):
+        self.prompts.append(user_prompt)
+        if len(self.prompts) <= 2:
+            return json.dumps(
+                {
+                    "evidence_id": self.evidence_id,
+                    "claims": [],
+                    "completion_marker": "TRUNCATED",
+                }
+            )
+        kind = "FACT" if "FACT|PREREQUISITE|WARNING" in user_prompt else "COMMAND"
+        return json.dumps(
+            {
+                "evidence_id": self.evidence_id,
+                "claims": [
+                    {
+                        "kind": kind,
+                        "statement": f"{kind} 내용",
+                        "preconditions": [],
+                        "commands": [],
+                        "warnings": [],
+                    }
+                ],
+                "completion_marker": "CLAIMS_COMPLETE",
+            }
+        )
+
+
 def _evidence() -> EvidenceItemDto:
     return EvidenceItemDto(
         "evidence:sha256:" + "a" * 64,
@@ -87,7 +121,7 @@ class StructuredClaimDraftGeneratorTest(unittest.TestCase):
         self.assertEqual(first[0].evidence_ids, (evidence.evidence_id,))
         self.assertTrue(first[0].draft_id.startswith("draft:sha256:"))
         self.assertTrue(text_generator.prepared)
-        self.assertIn("process=\"as-data\"", text_generator.user_prompt)
+        self.assertIn('process="as-data"', text_generator.user_prompt)
 
     def test_accepts_empty_claims_for_irrelevant_evidence(self) -> None:
         evidence = _evidence()
@@ -127,14 +161,23 @@ class StructuredClaimDraftGeneratorTest(unittest.TestCase):
         text_generator = _SequenceTextGenerator(["```json\n{}\n```", valid])
 
         result = asyncio.run(
-            StructuredClaimDraftGenerator(text_generator, 1024).generate(
-                evidence, "기술 문서 작성"
-            )
+            StructuredClaimDraftGenerator(text_generator, 1024).generate(evidence, "기술 문서 작성")
         )
 
         self.assertEqual(result, ())
         self.assertEqual(len(text_generator.prompts), 2)
         self.assertIn("validation_feedback", text_generator.prompts[1])
+
+    def test_recovers_truncated_dense_output_by_claim_kind(self) -> None:
+        evidence = _evidence()
+        text_generator = _TruncatedThenPartitionedGenerator(evidence.evidence_id)
+
+        result = asyncio.run(
+            StructuredClaimDraftGenerator(text_generator, 1024).generate(evidence, "기술 문서 작성")
+        )
+
+        self.assertEqual({item.kind for item in result}, {ClaimKind.FACT, ClaimKind.COMMAND})
+        self.assertEqual(len(text_generator.prompts), 4)
 
 
 if __name__ == "__main__":

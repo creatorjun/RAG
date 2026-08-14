@@ -146,9 +146,7 @@ class _StructuredGenerator:
                 ensure_ascii=False,
             )
         if "RELATIONS_COMPLETE" in user_prompt:
-            return json.dumps(
-                {"relations": [], "completion_marker": "RELATIONS_COMPLETE"}
-            )
+            return json.dumps({"relations": [], "completion_marker": "RELATIONS_COMPLETE"})
         if "TASK_PLAN_COMPLETE" in user_prompt:
             return json.dumps(
                 {
@@ -157,9 +155,7 @@ class _StructuredGenerator:
                             "task_id": "operations-guide",
                             "title": "운영 개요",
                             "objective": "검증된 운영 사실을 정리한다.",
-                            "owned_claim_refs": [
-                                claim["claim_ref"] for claim in payload["claims"]
-                            ],
+                            "owned_claim_refs": [claim["claim_ref"] for claim in payload["claims"]],
                             "required_sections": ["overview"],
                             "depends_on_task_ids": [],
                         }
@@ -170,8 +166,8 @@ class _StructuredGenerator:
             )
         if "TASK_COMPLETE" in user_prompt:
             task = payload["task"]
-            evidence_ids = list(task["allowed_evidence_ids"])
-            markers = " ".join(f"[evidence:{item}]" for item in evidence_ids)
+            evidence_refs = list(task["allowed_evidence_refs"])
+            markers = " ".join(f"[evidence:{item}]" for item in evidence_refs)
             return json.dumps(
                 {
                     "task_id": task["task_id"],
@@ -180,11 +176,11 @@ class _StructuredGenerator:
                             "section_key": "overview",
                             "heading": "검증된 운영 사실",
                             "markdown": f"운영 사실을 정리한다. {markers}",
-                            "used_claim_ids": list(task["owned_claim_ids"]),
-                            "used_evidence_ids": evidence_ids,
+                            "used_claim_refs": list(task["owned_claim_refs"]),
+                            "used_evidence_refs": evidence_refs,
                         }
                     ],
-                    "conflict_claim_ids": [],
+                    "conflict_claim_refs": [],
                     "completion_marker": "TASK_COMPLETE",
                 },
                 ensure_ascii=False,
@@ -250,7 +246,7 @@ class LocalDocumentJobPipelineTest(unittest.TestCase):
                 "local/test-model",
                 "a" * 40,
                 16_384,
-                8_192,
+                12_000,
                 "운영 절차를 먼저 배치한다.",
                 "b" * 64,
                 2,
@@ -296,9 +292,7 @@ class LocalDocumentJobPipelineTest(unittest.TestCase):
                 plans,
                 results,
                 finals,
-                ChunkingConfigDto(
-                    "conservative-utf8-bytes-v1", "1", 800, 1_200, 80, 0.1
-                ),
+                ChunkingConfigDto("conservative-utf8-bytes-v1", "1", 800, 1_200, 80, 0.1),
                 claim_drafts=claim_drafts,
                 chunker=StructureAwareTextChunker(ConservativeUtf8TokenCounter()),
                 source_factory=lambda path: BeforeTextDocumentSource(path, 1_000_000),
@@ -311,15 +305,13 @@ class LocalDocumentJobPipelineTest(unittest.TestCase):
                     1_000_000,
                 ),
                 model_factory=lambda _: _StructuredGenerator(),
-                observed_generator_factory=lambda generator, job_id, stage: (
-                    ObservedTextGenerator(
-                        generator,
-                        job_id,
-                        stage,
-                        model_streams,
-                        clock,
-                        stream_ids,
-                    )
+                observed_generator_factory=lambda generator, job_id, stage: ObservedTextGenerator(
+                    generator,
+                    job_id,
+                    stage,
+                    model_streams,
+                    clock,
+                    stream_ids,
                 ),
                 claim_draft_generator_factory=claim_draft_factory,
                 claim_relation_generator_factory=claim_relation_factory,
@@ -332,9 +324,7 @@ class LocalDocumentJobPipelineTest(unittest.TestCase):
             asyncio.run(stages[0].execute(job.job_id))
             self.assertTrue(output_root.is_dir())
 
-            completed = asyncio.run(
-                RunDocumentJob(jobs, jobs, stages).execute(job.job_id)
-            )
+            completed = asyncio.run(RunDocumentJob(jobs, jobs, stages).execute(job.job_id))
             self.assertEqual(completed.state, DocumentJobState.COMPLETED)
             self.assertEqual(completed.last_percentage, 100)
             self.assertEqual(stage_budgets["claim_draft"][0], 2_048)
@@ -344,18 +334,10 @@ class LocalDocumentJobPipelineTest(unittest.TestCase):
             self.assertEqual(len(asyncio.run(jobs.list_after(job.job_id))), 10)
             stream = asyncio.run(model_streams.snapshot(job.job_id))
             self.assertEqual(
-                {
-                    event.stage
-                    for event in stream.events
-                    if event.text
-                },
+                {event.stage for event in stream.events if event.text},
                 {"CLAIM_DRAFT", "TASK_PLAN", "TASK_OUTPUT"},
             )
-            self.assertTrue(
-                asyncio.run(
-                    artifacts.list_relative_paths(job.job_id, "claim-drafts")
-                )
-            )
+            self.assertTrue(asyncio.run(artifacts.list_relative_paths(job.job_id, "claim-drafts")))
             published = output_root / "runs" / job.job_id
             self.assertTrue((published / "documents/generated.md").is_file())
             self.assertTrue((published / "_reports/comparison.json").is_file())
@@ -373,8 +355,7 @@ class LocalDocumentJobPipelineTest(unittest.TestCase):
                 claim_drafts,
             )
             inspected = {
-                item.checkpoint_id: item
-                for item in asyncio.run(checkpoints.inspect(job.job_id))
+                item.checkpoint_id: item for item in asyncio.run(checkpoints.inspect(job.job_id))
             }
             self.assertEqual(
                 inspected["source_manifest"].status,
@@ -392,9 +373,7 @@ class LocalDocumentJobPipelineTest(unittest.TestCase):
                 definitions,
                 finals,
             )
-            result = asyncio.run(
-                GetDocumentJobResult(jobs, reader).execute(job.job_id)
-            )
+            result = asyncio.run(GetDocumentJobResult(jobs, reader).execute(job.job_id))
             self.assertEqual(result.availability, JobResultAvailability.PUBLISHED)
             self.assertEqual(result.document_path, str(published / "documents/generated.md"))
             self.assertTrue(result.quality.valid)

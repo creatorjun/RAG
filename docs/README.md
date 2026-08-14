@@ -36,6 +36,7 @@
 | [ADR-0004](adr/0004-web-egress-policy.md) | 보안·검색 개발자 | Milestone 4 | 기본 차단 외부 검색과 비식별화 게이트 |
 | [ADR-0005](adr/0005-folder-revision-boundary.md) | 전체 개발자, 운영자 | Milestone 1 | Confluence API 제거와 폴더 리비전 경계 |
 | [ADR-0006](adr/0006-evidence-ledger-orchestration.md) | 전체 개발자 | Milestone 1, 5~7 | Evidence·Claim Ledger 기반 결정적 오케스트레이션 |
+| [ADR-0007](adr/0007-context-bounded-lossless-generation.md) | 모델·파이프라인 개발자 | Milestone 5 | 컨텍스트·출력 한도를 넘는 무손실 shard와 중복 회수 정책 |
 
 ## 3. 계획 추적성
 
@@ -47,7 +48,7 @@
 | 폴더 기반 수정·비교 | `folder-revision-workflow.md`, `security.md`, ADR-0005 | `evaluation.md` 경로·불변성·diff 시험 |
 | BGE-M3 분류와 중복 제거 | `pipeline.md`, `module-design.md` | `evaluation.md` 분류·중복 지표 |
 | SQLite·FAISS | `data-model.md`, ADR-0003 | `evaluation.md` 일관성·복구 시험 |
-| Qwen 주장 추출과 합성 | `pipeline.md`, `contracts.md`, ADR-0002 | `evaluation.md` 근거·인용 평가 |
+| Qwen 주장 추출과 합성 | `pipeline.md`, `contracts.md`, ADR-0002, ADR-0007 | `evaluation.md` 근거·인용·장문 경계 평가 |
 | Job·Task 오케스트레이션과 GUI | `orchestration-workflow.md`, ADR-0006 | `evaluation.md` Job·Coverage·GUI 회귀 |
 | 데스크톱 화면·설정 계약 | `desktop-gui.md`, `configuration.md` | GUI ViewModel·설정 CAS·상태 복원 시험 |
 | 웹 검증 | `security.md`, `pipeline.md`, ADR-0004 | `evaluation.md` egress·인젝션 회귀 |
@@ -100,6 +101,7 @@
 14. Derived 산출물만으로 지지되는 사실은 게시할 수 없다.
 15. 품질 게이트 통과 전에는 `data/after/runs`에 게시 run을 만들지 않는다.
 16. 최종 문서는 검증된 Task 섹션을 결정적으로 조립하고 전체 자유 재작성하지 않는다.
+17. 단일 LLM 호출 한도는 최종 문서 길이 한도가 아니며 shard 병합 전 원본 Evidence를 손실 압축하지 않는다.
 
 ## 6. 문서 유지 규칙
 

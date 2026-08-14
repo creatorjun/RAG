@@ -3,8 +3,9 @@
 
 ## 1. 범위
 
-이 문서는 [ADR-0006](adr/0006-evidence-ledger-orchestration.md)을 구현하는 Coordinator, Job,
-Evidence, Claim Ledger, Coverage Matrix, Task, 품질 게이트와 로컬 GUI 계약을 정의한다.
+이 문서는 [ADR-0006](adr/0006-evidence-ledger-orchestration.md)과
+[ADR-0007](adr/0007-context-bounded-lossless-generation.md)을 구현하는 Coordinator, Job,
+Evidence, Claim Ledger, Coverage Matrix, 장문 Task shard, 품질 게이트와 로컬 GUI 계약을 정의한다.
 
 ## 2. 전체 흐름
 
@@ -95,7 +96,7 @@ Claim은 최소 `claim_id`, `kind`, `statement`, `evidence_ids`, `preconditions`
 | 관계 | 조립 정책 |
 | --- | --- |
 | `EXACT_DUPLICATE` | 하나로 병합하고 모든 Evidence 유지 |
-| `SEMANTIC_EQUIVALENT` | 표현 통합, 적용 범위 차이는 보존 |
+| `SEMANTIC_EQUIVALENT` | kind·전제·명령·경고가 같을 때만 병합, 다르면 관계만 보존 |
 | `COMPLEMENTARY` | 같은 절차의 순서 또는 하위 항목으로 결합 |
 | `CONTEXTUAL_REPEAT` | 서로 다른 운영 단계에 각각 유지 |
 | `CONFLICT` | 두 주장을 충돌 항목으로 함께 게시 |
@@ -109,11 +110,15 @@ Claim은 최소 `claim_id`, `kind`, `statement`, `evidence_ids`, `preconditions`
 TaskPacket은 목적, 필수 Claim ID, 허용 Evidence ID, 중복 관계, 필수 섹션, 출력 스키마를
 포함한다. 모델은 다른 Task의 결과나 자유 검색 결과를 사실 근거로 사용할 수 없다.
 
+relation 연결 요소는 planning batch 경계를 가능한 한 함께 넘는다. Task가 8개보다 많은 owned
+Claim을 가지면 Worker가 선제 shard하며, 구조 출력이 불완전하면 Claim·section·context·Evidence
+순으로 더 나눈다. 각 호출은 compact ref를 사용하고 최종 TaskOutput은 코드가 병합한다.
+
 ## 8. 검증과 조립
 
 태스크 검증은 완료 표식, 스키마, 필수 Claim, 출처, 명령·전제조건·경고·롤백 보존을 검사한다.
-결정적 검증 실패는 모델이 우회할 수 없다. 의미 검증 실패는 동일 Evidence를 고정한 채 해당
-섹션만 최대 2회 재작성한다.
+결정적 검증 실패는 모델이 우회할 수 없다. 구조·완료 실패는 우선 더 작은 shard로 전환하고,
+병합 결과의 의미 검증 실패는 동일 Evidence를 고정한 채 Task attempt를 최대 2회 재작성한다.
 
 Assembler는 검증된 섹션, 제목, 목차, 출처, 원본 목록을 코드로 조립한다. 전체 문서를 모델에
 다시 전달하지 않는다.

@@ -298,6 +298,11 @@ otherwise -> uncertain
 
 quote를 찾지 못한 주장은 저장하지 않고 모델 출력 오류로 기록한다.
 
+각 Evidence는 독립 호출과 write-once 체크포인트를 가진다. 전체 Claim JSON이 교정 1회 뒤에도
+완료 표식 또는 schema 검증을 통과하지 못하면 `FACT·PREREQUISITE·WARNING`과
+`PROCEDURE·COMMAND·VALIDATION·ROLLBACK`으로 나누고, 필요하면 Claim kind 하나까지 재귀
+분할한다. 이 분할은 원문을 요약하거나 자르지 않고 출력 cardinality만 줄인다.
+
 ### 4.3 `PLAN_WEB_QUERY`
 
 외부 검증 후보 조건:
@@ -412,6 +417,12 @@ Derived 산출물은 중복 후보 탐색에는 사용할 수 있지만 Evidence
 Claim 관계는 exact·lexical·command fingerprint·embedding으로 후보를 만든 뒤 구조화된 의미
 판정으로 확정한다. 임베딩 점수만으로 Claim을 삭제하거나 병합하지 않는다.
 
+현재 로컬 수직 슬라이스의 후보 recall은 원본 경로, 전체 문장 순서, kind, token inverted block,
+character 3-gram MinHash view를 합쳐 확보한다. 입력 초과와 불완전 relation JSON은 모두 최대
+40 Claim의 겹침 batch로 전환한다. 관계 출력은 compact Claim ref 튜플을 사용하며, 잘린 batch는
+내부 쌍과 LEFT-RIGHT 교차 쌍으로 손실 없이 재귀 분할한다. 의미 동등 쌍도
+kind·전제조건·명령·경고가 모두 같을 때만 한 Claim으로 접고 Evidence ID 합집합을 유지한다.
+
 ### 5.4 `REDUCE_SYNTHESIS`
 
 이 단계는 `PLAN_TASKS`, `EXECUTE_TASK`, `VALIDATE_TASK`, `ASSEMBLE_DOCUMENT`로 분리한다.
@@ -420,8 +431,13 @@ Claim 관계는 exact·lexical·command fingerprint·embedding으로 후보를 �
 2. 계획 확정 후 Task 수와 필수 검증 수를 고정한다.
 3. 각 Task는 허용 Claim·Evidence와 출력 스키마를 가진 TaskPacket만 입력받는다.
 4. 출력은 섹션별 Markdown, 사용 Claim ID, Evidence ID, 충돌 목록을 포함한다.
-5. 실패한 섹션만 동일 Evidence로 최대 2회 재작성한다.
-6. 검증된 섹션은 코드가 결정적으로 조립한다. 전체 자유 재작성은 금지한다.
+5. relation 연결 요소를 우선 보존해 최대 40 Claim planning batch에 packing한다.
+6. owned Claim이 8개를 넘는 Task는 선제 shard한다. 입력 초과·완료 표식 누락·불완전 JSON은
+   Claim, section, context Claim, Evidence 순으로 최소 단위까지 재귀 분할한다.
+7. 내부 64자리 ID는 호출 한정 compact ref로 바꾸며 알 수 없는 ref는 거부한다.
+8. shard Markdown과 Claim·Evidence·conflict 집합은 코드가 결정론적으로 병합한다. LLM reduce와
+   전체 자유 재작성은 금지한다.
+9. 최종 Task 검증 실패는 동일 Evidence와 오류 코드로 최대 2회 재작성한다.
 
 ### 5.5 `VERIFY_CITATIONS`
 

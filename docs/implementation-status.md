@@ -1,9 +1,9 @@
 <!-- docs/implementation-status.md -->
 # 구현 상태와 검증 기준선
 
-- 기준일: 2026-08-12
+- 기준일: 2026-08-14
 - 애플리케이션 버전: `0.1.0`
-- 현재 범위: Milestone 1 Job 기반, ADR-0006 Phase 2, 기존 Presentation 통합 GUI 기반
+- 현재 범위: Milestone 1 Job 기반, ADR-0006 Phase 2, ADR-0007 무손실 장문 shard, 기존 Presentation 통합 GUI 기반
 
 ## 1. 완료된 산출물
 
@@ -66,11 +66,11 @@ Application→Infrastructure/Presentation, Presentation→Bootstrap/Infrastructu
 | M1-22 | 완료 | 파일 lock+runner token 소유권, PID claim, 5초 heartbeat, 3회 누락 stale 판정, launch sequence 회수, 자식 process reaper | 없음 |
 | M1-24 | 완료 | 고정 10단계 실제 어댑터, Job별 subprocess, event 기반 멱등 재개, SIGTERM·토큰 경계 즉시 취소·15초 watchdog 강제 종료 | 없음 |
 | M5-02 | 부분 완료 | text chunk Evidence DTO, 결정 ID, 100% 배정 검사, 전용 파일 저장소 | parser 구조 요소·ACL Evidence |
-| M5-03 | 완료 | Evidence 제한 Claim 추출, Evidence별 write-once partial 재개, 결정 ID, 동일 내용·다중 Evidence 병합, Ledger 저장소 | 없음 |
-| M5-04 | 부분 완료 | 구조화 관계 판정, compact Claim ref, context 초과 시 원본·전체 유사 순서·종류별 40-Claim 겹침 batch, known-pair·중복·상충 pair 검증, conflict 전달 | 대규모 평가 기반 후보 recall 보정 |
+| M5-03 | 완료 | Evidence 제한 Claim 추출, 출력 잘림 시 Claim kind 재귀 분할, Evidence별 write-once 재개, exact·안전한 semantic equivalent의 다중 Evidence 병합 | 없음 |
+| M5-04 | 부분 완료 | 구조화 관계 판정, compact Claim ref, 입력 초과·불완전 출력 시 재귀 분할, 원본·문장·종류·token·3-gram MinHash 후보 view, known-pair·상충 검증 | 실제 대규모 평가 기반 후보 recall 보정 |
 | M5-05 | 완료 | Claim 단일 소유, Evidence 100% Coverage, 순환 없는 고정 Task DAG | 없음 |
 | M5-06 | 완료 | TaskPacket·TaskOutput strict 계약과 write-once attempt 저장 | 없음 |
-| M5-07 | 부분 완료 | JSON 전용 MLX stream, 토큰 경계 취소, Job별 별도 프로세스·heartbeat·유예 후 자기 process group 종료, 실패 Task만 최대 3회, write-once attempt 복구 | Metal 압력 감시 |
+| M5-07 | 부분 완료 | JSON 전용 MLX stream, 실제 tokenizer 예산, per-call context 절반 출력 cap, 8 owned Claim 선제 shard, Claim·section·context·Evidence 재귀 분할과 compact ref 무손실 병합, 실패 Task 최대 3회 | Metal 압력 감시·실모델 장문 benchmark |
 | M5-08 | 완료 | 계획 순서 기반 Markdown 조립, Evidence→source 변환, 전체 모델 재작성 없음 | 없음 |
 | M5-09 | 부분 완료 | Claim/Evidence/source 100% 게이트 통과 후만 revision run·비교 보고서 게시 | 의미 정확도·인용 정확도 평가 세트 |
 | M1-30B | 완료 | after workspace, path guard, overwrite 차단 | OS 배포 ACL runbook |
@@ -87,11 +87,11 @@ Application→Infrastructure/Presentation, Presentation→Bootstrap/Infrastructu
 
 | 검사 | 결과 |
 | --- | --- |
-| pytest | 240 passed, 147 subtests passed |
-| branch coverage | 85.15%, 기준 85% 통과 |
+| pytest | 253 passed, 147 subtests passed |
+| branch coverage | 85.36%, 기준 85% 통과 |
 | 프로젝트 스킬 unittest | 4 passed |
 | Ruff | 통과 |
-| mypy strict | 154 source files 통과 |
+| mypy strict | 155 source files 통과 |
 | 아키텍처 import 경계 | Domain/Application/Infrastructure/Presentation 위반 0건, Job stage 구체 어댑터 import 0건 |
 | editable package 설치 | 성공, `rag` 콘솔 스크립트 생성 |
 | PySide6 GUI smoke | offscreen 2탭·macOS 고정 palette·오류 대비·중복 실행 차단·모델 카탈로그·다운로드 진행·Worker 취소·결과 품질·알림 상태 생성과 정상 종료, `rag-gui --help` 성공 |
@@ -127,10 +127,14 @@ Application→Infrastructure/Presentation, Presentation→Bootstrap/Infrastructu
 - 관계 판정기는 의미 있는 관계만 제안하고 코드는 알 수 없는 Claim, 중복 pair, `UNRELATED`
   출력을 거부한다.
 - Claim 추출·관계·Task 계획은 최종 문서 출력 상한을 그대로 예약하지 않고 각각 2,048·2,048·
-  4,096 토큰 상한을 사용한다. 관계와 계획 입력의 긴 ID는 요청 범위 compact ref로 치환한다.
-- 전체 관계·계획 요청이 context를 넘을 때만 최대 40개 Claim batch로 재시도한다. 관계 batch는
-  원본·문장 순서·종류별 후보를 겹쳐 구성하고, 계획 batch는 고유 namespace와 전체 Claim 단일
-  소유 검증을 적용한다.
+  4,096 토큰 상한을 사용한다. 관계·계획·Task 출력의 긴 ID는 요청 범위 compact ref로 치환한다.
+- 전체 관계·계획 요청의 context 초과뿐 아니라 완료 표식 누락과 불완전 JSON도 최대 40개 Claim
+  batch·재귀 분할로 전환한다. 관계 출력은 compact 3-tuple을 사용하고 실패 batch의 내부·교차
+  pair 공간을 빠짐없이 분할한다. 관계 후보는 원본·문장·종류·token·MinHash view를 합치고 계획은
+  relation component를 우선 packing한 뒤 namespace와 전체 Claim 단일 소유를 검증한다.
+- Task 출력은 한 호출에 context의 절반보다 큰 출력을 예약하지 않는다. owned Claim 8개 초과는
+  선제 shard하고, 실패 시 Claim·section·context Claim·Evidence 순으로 더 나눠 생성한 후 코드가
+  Markdown과 사용 Claim·Evidence·conflict를 병합한다.
 - Task planner의 제안 뒤 Claim 단일 소유, Evidence 100%, 의존성 존재와 DAG 무순환을 코드로
   다시 검증한다.
 - 각 Task attempt는 구조화 JSON 원본과 검증 보고서를 별도 write-once 파일로 보존한다.

@@ -312,6 +312,15 @@
 - 구조 출력 실패 시 같은 근거로 교정 프롬프트 1회 허용
 - 교정 실패는 `ModelOutputValidationError`
 
+#### 구조화 장문 생성 어댑터
+
+- Claim 추출은 불완전 출력에서 Claim kind를 재귀 분할
+- 관계·계획은 input budget과 output schema 실패를 모두 bounded Claim batch로 전환
+- Task 작성은 최대 8 owned Claim을 기준으로 선제 shard하고 최소 단위까지 재귀 분할
+- 호출 범위 compact Claim·Evidence ref만 모델에 노출하고 원래 ID는 parser가 복원
+- shard 결과는 Markdown·Claim·Evidence·conflict 합집합으로 결정론적 병합
+- per-call output은 context 절반 이하이며 최종 문서 길이는 shard 수로 확장
+
 ### 4.4 저장 어댑터
 
 #### `SqliteMetadataRepository`

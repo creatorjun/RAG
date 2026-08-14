@@ -85,18 +85,12 @@ _CLAIM_RELATION_OUTPUT_CAP = 2_048
 _TASK_PLAN_OUTPUT_CAP = 4_096
 ModelFactory = Callable[[StoredDocumentJobDefinitionDto], TextGeneratorPort]
 ObservedGeneratorFactory = Callable[[TextGeneratorPort, str, str], TextGeneratorPort]
-ClaimDraftGeneratorFactory = Callable[
-    [TextGeneratorPort, int, str], ClaimDraftGeneratorPort
-]
-ClaimRelationGeneratorFactory = Callable[
-    [TextGeneratorPort, int, str], ClaimRelationGeneratorPort
-]
+ClaimDraftGeneratorFactory = Callable[[TextGeneratorPort, int, str], ClaimDraftGeneratorPort]
+ClaimRelationGeneratorFactory = Callable[[TextGeneratorPort, int, str], ClaimRelationGeneratorPort]
 TaskDefinitionGeneratorFactory = Callable[
     [TextGeneratorPort, int, str], TaskDefinitionGeneratorPort
 ]
-TaskOutputGeneratorFactory = Callable[
-    [TextGeneratorPort, int, str], TaskOutputGeneratorPort
-]
+TaskOutputGeneratorFactory = Callable[[TextGeneratorPort, int, str], TaskOutputGeneratorPort]
 SourceFactory = Callable[[Path], TextDocumentCollectionPort]
 WorkspaceFactory = Callable[[Path, Path], DocumentWorkspacePort]
 FileDigest = Callable[[Path], str]
@@ -220,7 +214,14 @@ class LocalDocumentJobStages:
             Path(execution.output_root),
         )
         generator = self._model_factory(definition)
-        output_budget = execution.max_output_tokens
+        # Reserving more than half of a local model's context for one response can
+        # leave too little room for Evidence and the system contract. Task output is
+        # losslessly sharded, so aggregate document length is no longer limited by
+        # this per-call ceiling.
+        output_budget = min(
+            execution.max_output_tokens,
+            execution.context_tokens // 2,
+        )
         additional = execution.additional_system_prompt
         result_writer = self._task_output_generator_factory(
             self._observed_generator_factory(generator, job_id, "TASK_OUTPUT"),
@@ -286,10 +287,7 @@ class LocalDocumentJobStages:
             resolved_parent = existing_parent.resolve(strict=True)
         except OSError as error:
             raise revision_error("IO_FAILURE") from error
-        if (
-            absolute_source != resolved_source
-            or existing_parent != resolved_parent
-        ):
+        if absolute_source != resolved_source or existing_parent != resolved_parent:
             raise revision_error("LINK_NOT_ALLOWED")
         if not resolved_source.is_dir() or not resolved_parent.is_dir():
             raise revision_error("IO_FAILURE")
@@ -429,9 +427,7 @@ class LocalDocumentJobStages:
         plan = await self._plans.load(job_id)
         ledger = await self._claims.load(job_id)
         evidence = await self._evidence.load(job_id)
-        execution = await runtime.task_execution.execute(
-            job_id, plan, ledger, evidence
-        )
+        execution = await runtime.task_execution.execute(job_id, plan, ledger, evidence)
         valid = sum(report.valid for report in execution.validations)
         return JobStageResultDto(
             "Task 생성과 attempt 체크포인트 저장을 완료했습니다.",
@@ -537,11 +533,7 @@ class LocalDocumentJobStages:
         )
         comparison = await workspace.compare_run(job_id)
         run_root = Path(execution_settings.output_root) / "runs" / job_id
-        document_path = (
-            run_root
-            / "documents"
-            / runtime.definition.request.output_relative_path
-        )
+        document_path = run_root / "documents" / runtime.definition.request.output_relative_path
         comparison_markdown_path = run_root / "_reports/comparison.md"
         synthesis_report_path = run_root / "_reports/synthesis.json"
         value: dict[str, object] = {
@@ -553,9 +545,7 @@ class LocalDocumentJobStages:
             "file_count": len(comparison.files),
             "counts": comparison.counts,
             "document_sha256": self._file_sha256(document_path),
-            "comparison_markdown_sha256": self._file_sha256(
-                comparison_markdown_path
-            ),
+            "comparison_markdown_sha256": self._file_sha256(comparison_markdown_path),
             "synthesis_report_sha256": self._file_sha256(synthesis_report_path),
         }
         await self._write_or_verify_json(job_id, _PUBLISH_RESULT, value)
@@ -582,9 +572,7 @@ class LocalDocumentJobStages:
         execution = definition.request.execution_settings
         if execution is None:
             raise revision_error("JOB_DEFINITION_INVALID", {"job_id": definition.job_id})
-        sources_by_path = {
-            item.relative_path: item.source_sha256 for item in evidence_items
-        }
+        sources_by_path = {item.relative_path: item.source_sha256 for item in evidence_items}
         request = GeneratedDocumentWriteDto(
             definition.request.output_relative_path,
             markdown,
@@ -633,8 +621,7 @@ class LocalDocumentJobStages:
                 not isinstance(synthesis, dict)
                 or synthesis.get("schema_version") != 1
                 or synthesis.get("run_id") != definition.job_id
-                or synthesis.get("output_relative_path")
-                != definition.request.output_relative_path
+                or synthesis.get("output_relative_path") != definition.request.output_relative_path
                 or synthesis.get("output_sha256") != expected_digest
                 or synthesis.get("model_id") != execution.model_id
                 or synthesis.get("model_revision") != execution.model_revision
@@ -643,9 +630,7 @@ class LocalDocumentJobStages:
                     "FINAL_QUALITY_GATE_FAILED", {"job_id": definition.job_id}
                 ) from error
 
-    def _source(
-        self, definition: StoredDocumentJobDefinitionDto
-    ) -> TextDocumentCollectionPort:
+    def _source(self, definition: StoredDocumentJobDefinitionDto) -> TextDocumentCollectionPort:
         return self._source_factory(Path(definition.request.source_root))
 
     async def _read_documents(
@@ -667,8 +652,7 @@ class LocalDocumentJobStages:
             if (
                 value.get("schema_version") != 1
                 or value.get("job_id") != job_id
-                or value.get("pipeline_fingerprint")
-                != definition.request.pipeline_fingerprint
+                or value.get("pipeline_fingerprint") != definition.request.pipeline_fingerprint
                 or value.get("source_root") != definition.request.source_root
             ):
                 raise ValueError("source manifest mismatch")

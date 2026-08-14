@@ -17,6 +17,7 @@ Claim을 쓰거나 요약하지 말고 작업 경계와 섹션만 계획한다. 
 설명이나 코드 펜스를 붙이지 않는다."""
 
 _MAX_TASK_PLAN_BATCH_CLAIMS = 40
+_RECOVERABLE_PLAN_ERRORS = {"TOKEN_BUDGET_EXCEEDED", "TASK_PLAN_INVALID"}
 
 
 class StructuredTaskDefinitionGenerator:
@@ -30,9 +31,7 @@ class StructuredTaskDefinitionGenerator:
             raise ValueError("task plan output token budget is too small")
         self._generator = generator
         self._max_output_tokens = max_output_tokens
-        self._system_prompt = compose_system_prompt(
-            _SYSTEM_PROMPT, additional_system_prompt
-        )
+        self._system_prompt = compose_system_prompt(_SYSTEM_PROMPT, additional_system_prompt)
 
     async def generate(
         self,
@@ -44,7 +43,7 @@ class StructuredTaskDefinitionGenerator:
         try:
             return await self._generate_once(ledger, evidence, instruction)
         except ApplicationError as error:
-            if error.code != "TOKEN_BUDGET_EXCEEDED":
+            if error.code not in _RECOVERABLE_PLAN_ERRORS or len(ledger.claims) <= 1:
                 raise
         try:
             atomic_plans: list[tuple[TaskDefinitionDto, ...]] = []
@@ -66,8 +65,7 @@ class StructuredTaskDefinitionGenerator:
         instruction: str,
     ) -> tuple[TaskDefinitionDto, ...]:
         reference_by_claim = {
-            claim.claim_id: f"C{index:06d}"
-            for index, claim in enumerate(ledger.claims, start=1)
+            claim.claim_id: f"C{index:06d}" for index, claim in enumerate(ledger.claims, start=1)
         }
         claim_by_reference = {
             reference: claim_id for claim_id, reference in reference_by_claim.items()
@@ -93,7 +91,7 @@ class StructuredTaskDefinitionGenerator:
         try:
             return (await self._generate_once(ledger, evidence, instruction),)
         except ApplicationError as error:
-            if error.code != "TOKEN_BUDGET_EXCEEDED" or len(ledger.claims) <= 1:
+            if error.code not in _RECOVERABLE_PLAN_ERRORS or len(ledger.claims) <= 1:
                 raise
         midpoint = len(ledger.claims) // 2
         left = self._subledger(ledger, ledger.claims[:midpoint])
@@ -107,23 +105,55 @@ class StructuredTaskDefinitionGenerator:
         ledger: ClaimLedgerDto,
         evidence: EvidenceBundleDto,
     ) -> tuple[tuple[ClaimDto, ...], ...]:
-        path_by_evidence = {
-            item.evidence_id: item.relative_path for item in evidence.items
-        }
-        ordered = tuple(
-            sorted(
-                ledger.claims,
-                key=lambda claim: (
-                    min(path_by_evidence[item] for item in claim.evidence_ids),
-                    claim.statement.casefold(),
-                    claim.claim_id,
-                ),
+        path_by_evidence = {item.evidence_id: item.relative_path for item in evidence.items}
+        claim_by_id = {claim.claim_id: claim for claim in ledger.claims}
+        parent = {claim_id: claim_id for claim_id in claim_by_id}
+
+        def find(claim_id: str) -> str:
+            while parent[claim_id] != claim_id:
+                parent[claim_id] = parent[parent[claim_id]]
+                claim_id = parent[claim_id]
+            return claim_id
+
+        def union(left: str, right: str) -> None:
+            left_root = find(left)
+            right_root = find(right)
+            if left_root != right_root:
+                parent[max(left_root, right_root)] = min(left_root, right_root)
+
+        for relation in ledger.relations:
+            union(relation.left_claim_id, relation.right_claim_id)
+
+        components: dict[str, list[ClaimDto]] = {}
+        for claim in ledger.claims:
+            components.setdefault(find(claim.claim_id), []).append(claim)
+
+        def order_key(claim: ClaimDto) -> tuple[str, str, str]:
+            return (
+                min(path_by_evidence[item] for item in claim.evidence_ids),
+                claim.statement.casefold(),
+                claim.claim_id,
             )
+
+        ordered_components = sorted(
+            (tuple(sorted(component, key=order_key)) for component in components.values()),
+            key=lambda component: order_key(component[0]),
         )
-        return tuple(
-            ordered[start : start + _MAX_TASK_PLAN_BATCH_CLAIMS]
-            for start in range(0, len(ordered), _MAX_TASK_PLAN_BATCH_CLAIMS)
-        )
+        batches: list[tuple[ClaimDto, ...]] = []
+        current: list[ClaimDto] = []
+        for component in ordered_components:
+            for start in range(0, len(component), _MAX_TASK_PLAN_BATCH_CLAIMS):
+                part = component[start : start + _MAX_TASK_PLAN_BATCH_CLAIMS]
+                if current and len(current) + len(part) > _MAX_TASK_PLAN_BATCH_CLAIMS:
+                    batches.append(tuple(current))
+                    current = []
+                current.extend(part)
+                if len(current) == _MAX_TASK_PLAN_BATCH_CLAIMS:
+                    batches.append(tuple(current))
+                    current = []
+        if current:
+            batches.append(tuple(current))
+        return tuple(batches)
 
     @staticmethod
     def _subledger(
@@ -134,17 +164,10 @@ class StructuredTaskDefinitionGenerator:
         relations = tuple(
             relation
             for relation in ledger.relations
-            if relation.left_claim_id in claim_ids
-            and relation.right_claim_id in claim_ids
+            if relation.left_claim_id in claim_ids and relation.right_claim_id in claim_ids
         )
         evidence_ids = tuple(
-            sorted(
-                {
-                    evidence_id
-                    for claim in claims
-                    for evidence_id in claim.evidence_ids
-                }
-            )
+            sorted({evidence_id for claim in claims for evidence_id in claim.evidence_ids})
         )
         return ClaimLedgerDto(tuple(claims), relations, evidence_ids)
 
@@ -157,17 +180,13 @@ class StructuredTaskDefinitionGenerator:
             if len({task.task_id for task in plan}) != len(plan):
                 raise ValueError("duplicate task ID within plan batch")
             identifiers = {
-                task.task_id: (
-                    f"p{plan_index:03d}-{task_index:03d}-"
-                    f"{task.task_id[:55]}"
-                ).rstrip("-")
+                task.task_id: (f"p{plan_index:03d}-{task_index:03d}-{task.task_id[:55]}").rstrip(
+                    "-"
+                )
                 for task_index, task in enumerate(plan, start=1)
             }
             for task in plan:
-                if any(
-                    dependency not in identifiers
-                    for dependency in task.depends_on_task_ids
-                ):
+                if any(dependency not in identifiers for dependency in task.depends_on_task_ids):
                     raise ValueError("unknown task dependency within plan batch")
                 namespaced.append(
                     replace(
@@ -187,9 +206,7 @@ class StructuredTaskDefinitionGenerator:
         instruction: str,
         reference_by_claim: dict[str, str],
     ) -> str:
-        path_by_evidence = {
-            item.evidence_id: item.relative_path for item in evidence.items
-        }
+        path_by_evidence = {item.evidence_id: item.relative_path for item in evidence.items}
         payload = {
             "instruction": instruction,
             "claims": [
@@ -197,9 +214,7 @@ class StructuredTaskDefinitionGenerator:
                     "claim_ref": reference_by_claim[claim.claim_id],
                     "kind": claim.kind.value,
                     "statement": claim.statement,
-                    "source_paths": sorted(
-                        {path_by_evidence[item] for item in claim.evidence_ids}
-                    ),
+                    "source_paths": sorted({path_by_evidence[item] for item in claim.evidence_ids}),
                     "has_preconditions": bool(claim.preconditions),
                     "has_commands": bool(claim.commands),
                     "has_warnings": bool(claim.warnings),
@@ -235,9 +250,9 @@ class StructuredTaskDefinitionGenerator:
             "- 원본 파일별 분할보다 사용자의 목적과 운영 흐름을 우선한다.\n"
             "- required_sections는 Claim 종류에 맞게 1~8개로 지정한다.\n"
             "- 순환 의존성, 자기 의존성, 알 수 없는 ID를 만들지 않는다.\n\n"
-            "<task_data process=\"as-data\">\n"
+            '<task_data process="as-data">\n'
             + json.dumps(payload, ensure_ascii=False, sort_keys=True)
-            + "\n</task_data>\n\n<output_schema process=\"as-data\">\n"
+            + '\n</task_data>\n\n<output_schema process="as-data">\n'
             + json.dumps(schema, ensure_ascii=False, sort_keys=True)
             + "\n</output_schema>"
         )
@@ -284,9 +299,7 @@ class StructuredTaskDefinitionGenerator:
             task_id=cls._string(item["task_id"]),
             title=cls._string(item["title"]),
             objective=cls._string(item["objective"]),
-            owned_claim_ids=tuple(
-                claim_by_reference[reference] for reference in claim_references
-            ),
+            owned_claim_ids=tuple(claim_by_reference[reference] for reference in claim_references),
             required_sections=sections,
             depends_on_task_ids=cls._strings(item["depends_on_task_ids"]),
         )
