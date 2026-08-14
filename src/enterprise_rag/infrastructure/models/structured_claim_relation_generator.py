@@ -11,7 +11,7 @@ from enterprise_rag.application.dto.claims import (
 )
 from enterprise_rag.application.dto.evidence import EvidenceBundleDto
 from enterprise_rag.application.ports.text_generator import TextGeneratorPort
-from enterprise_rag.domain.claims import ClaimRelationType
+from enterprise_rag.domain.claims import ClaimRelationType, claim_relation_merge_priority
 from enterprise_rag.domain.errors import ApplicationError, revision_error
 from enterprise_rag.infrastructure.models.system_prompt_policy import compose_system_prompt
 
@@ -26,18 +26,6 @@ _MEANINGFUL_RELATIONS = {
     ClaimRelationType.COMPLEMENTARY,
     ClaimRelationType.CONTEXTUAL_REPEAT,
     ClaimRelationType.CONFLICT,
-}
-# A claim pair can be evaluated in more than one overlapping candidate batch.  Local
-# model classifications are not guaranteed to be identical across those prompts, so
-# merge disagreements conservatively instead of failing the whole document job.
-# Non-collapsing relations outrank duplicate relations, and an explicit conflict is
-# retained above every other classification so downstream validation exposes it.
-_RELATION_MERGE_PRIORITY = {
-    ClaimRelationType.CONFLICT: 0,
-    ClaimRelationType.COMPLEMENTARY: 1,
-    ClaimRelationType.CONTEXTUAL_REPEAT: 2,
-    ClaimRelationType.SEMANTIC_EQUIVALENT: 3,
-    ClaimRelationType.EXACT_DUPLICATE: 4,
 }
 # Relation output grows with the number of possible pairs, not linearly with claims.
 # The compact tuple schema keeps normal 40-claim batches within the local model's
@@ -359,8 +347,8 @@ class StructuredClaimRelationGenerator:
         for relation in relations:
             pair = frozenset((relation.left_draft_id, relation.right_draft_id))
             existing = by_pair.get(pair)
-            if existing is None or _RELATION_MERGE_PRIORITY[relation.relation] < (
-                _RELATION_MERGE_PRIORITY[existing.relation]
+            if existing is None or claim_relation_merge_priority(relation.relation) < (
+                claim_relation_merge_priority(existing.relation)
             ):
                 by_pair[pair] = relation
         return tuple(

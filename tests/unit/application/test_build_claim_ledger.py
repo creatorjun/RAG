@@ -188,6 +188,57 @@ class BuildClaimLedgerTest(unittest.TestCase):
         self.assertEqual(len(ledger.claims), 2)
         self.assertEqual(len(ledger.relations), 1)
 
+    def test_merges_relation_disagreement_created_by_claim_collapse(self) -> None:
+        evidence = EvidenceBundleDto((_evidence(),), 1, 1)
+        first = ClaimDraftDto(
+            "draft:1",
+            ClaimKind.FACT,
+            "Oracle Linux 9의 호스트 방화벽은 firewalld를 기본 활성화한다.",
+            (evidence.items[0].evidence_id,),
+        )
+        equivalent = ClaimDraftDto(
+            "draft:2",
+            ClaimKind.FACT,
+            "Oracle Linux 9에서 firewalld는 기본 활성 서비스다.",
+            (evidence.items[0].evidence_id,),
+        )
+        general = ClaimDraftDto(
+            "draft:3",
+            ClaimKind.FACT,
+            "호스트 방화벽 관리에는 firewalld를 사용한다.",
+            (evidence.items[0].evidence_id,),
+        )
+        relations = (
+            ClaimRelationDraftDto(
+                first.draft_id,
+                equivalent.draft_id,
+                ClaimRelationType.SEMANTIC_EQUIVALENT,
+            ),
+            ClaimRelationDraftDto(
+                first.draft_id,
+                general.draft_id,
+                ClaimRelationType.SEMANTIC_EQUIVALENT,
+            ),
+            ClaimRelationDraftDto(
+                equivalent.draft_id,
+                general.draft_id,
+                ClaimRelationType.COMPLEMENTARY,
+            ),
+        )
+
+        builder = BuildClaimLedger()
+        ledger = builder.execute(evidence, (first, equivalent, general), relations)
+        reversed_ledger = builder.execute(
+            evidence,
+            (first, equivalent, general),
+            tuple(reversed(relations)),
+        )
+
+        self.assertEqual(ledger, reversed_ledger)
+        self.assertEqual(len(ledger.claims), 2)
+        self.assertEqual(len(ledger.relations), 1)
+        self.assertEqual(ledger.relations[0].relation, ClaimRelationType.COMPLEMENTARY)
+
     def test_excludes_evidence_without_technical_claims_from_reviewed_coverage(self) -> None:
         technical = _evidence("a")
         irrelevant = _evidence("d")

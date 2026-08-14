@@ -2002,6 +2002,12 @@ class _DesktopWindow:
             f"{latest.stage} · {latest.kind.value} · 생성 {generation_count}건 · "
             f"stream seq {snapshot.latest_sequence} · 검증 전 임시 출력"
         )
+        # QTextEdit keeps its current cursor while setPlainText replaces the
+        # document.  When a refreshed stream snapshot is shorter (for example
+        # after truncation), Qt can try to restore a cursor position beyond the
+        # new document and emit ``QTextCursor::setPosition ... out of range``.
+        # Reset the cursor with the document before installing the snapshot.
+        self._model_stream.clear()
         self._model_stream.setPlainText("".join(lines).lstrip())
         self._model_stream.moveCursor(self._gui.QTextCursor.MoveOperation.End)
         self._rendered_stream_sequence = snapshot.latest_sequence

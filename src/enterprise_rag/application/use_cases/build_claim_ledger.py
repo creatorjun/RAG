@@ -12,7 +12,7 @@ from enterprise_rag.application.dto.claims import (
     ClaimRelationDto,
 )
 from enterprise_rag.application.dto.evidence import EvidenceBundleDto
-from enterprise_rag.domain.claims import ClaimRelationType
+from enterprise_rag.domain.claims import ClaimRelationType, claim_relation_merge_priority
 from enterprise_rag.domain.errors import revision_error
 
 _PROTECTED_TERM = re.compile(
@@ -44,6 +44,7 @@ class BuildClaimLedger:
             drafts_by_key.setdefault(self._content_key(claim_draft), []).append(claim_draft)
 
         parent = {draft.draft_id: draft.draft_id for draft in drafts}
+        relations_by_draft_pair: dict[tuple[str, str], ClaimRelationType] = {}
 
         def find(draft_id: str) -> str:
             while parent[draft_id] != draft_id:
@@ -67,6 +68,14 @@ class BuildClaimLedger:
             right_draft = draft_by_id.get(relation.right_draft_id)
             if left_draft is None or right_draft is None:
                 raise revision_error("CLAIM_LEDGER_INVALID")
+            left_draft_id, right_draft_id = sorted(
+                (left_draft.draft_id, right_draft.draft_id)
+            )
+            draft_pair = (left_draft_id, right_draft_id)
+            existing_relation = relations_by_draft_pair.get(draft_pair)
+            if existing_relation is not None and existing_relation is not relation.relation:
+                raise revision_error("CLAIM_LEDGER_INVALID")
+            relations_by_draft_pair[draft_pair] = relation.relation
             if self._safe_to_collapse(left_draft, right_draft, relation.relation):
                 union(left_draft.draft_id, right_draft.draft_id)
 
@@ -112,9 +121,10 @@ class BuildClaimLedger:
                 relation_draft.relation,
             )
             existing = relations_by_pair.get((left_claim, right_claim))
-            if existing is not None and existing.relation is not claim_relation.relation:
-                raise revision_error("CLAIM_LEDGER_INVALID")
-            relations_by_pair[(left_claim, right_claim)] = claim_relation
+            if existing is None or claim_relation_merge_priority(
+                claim_relation.relation
+            ) < claim_relation_merge_priority(existing.relation):
+                relations_by_pair[(left_claim, right_claim)] = claim_relation
         try:
             reviewed_evidence = {
                 evidence_id for claim in claims_by_id.values() for evidence_id in claim.evidence_ids
