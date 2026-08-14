@@ -4,7 +4,7 @@ import asyncio
 import json
 import unittest
 
-from enterprise_rag.application.dto.claims import ClaimDraftDto
+from enterprise_rag.application.dto.claims import ClaimDraftDto, ClaimRelationDraftDto
 from enterprise_rag.application.dto.evidence import EvidenceBundleDto, EvidenceItemDto
 from enterprise_rag.domain.claims import ClaimKind, ClaimRelationType
 from enterprise_rag.domain.errors import ApplicationError, revision_error
@@ -283,6 +283,52 @@ class StructuredClaimRelationGeneratorTest(unittest.TestCase):
         self.assertEqual(len(relations), 15)
         self.assertEqual(len(pairs), 15)
         self.assertTrue(any('"comparison_side": "LEFT"' in p for p in text_generator.prompts))
+
+    def test_merge_resolves_overlapping_batch_disagreement_conservatively(self) -> None:
+        relations = [
+            ClaimRelationDraftDto(
+                "draft:one",
+                "draft:two",
+                ClaimRelationType.EXACT_DUPLICATE,
+            ),
+            ClaimRelationDraftDto(
+                "draft:two",
+                "draft:one",
+                ClaimRelationType.COMPLEMENTARY,
+            ),
+            ClaimRelationDraftDto(
+                "draft:one",
+                "draft:two",
+                ClaimRelationType.CONFLICT,
+            ),
+        ]
+
+        merged = StructuredClaimRelationGenerator._merge_relations(relations)
+        reversed_merged = StructuredClaimRelationGenerator._merge_relations(
+            list(reversed(relations))
+        )
+
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(merged[0].relation, ClaimRelationType.CONFLICT)
+        self.assertEqual(reversed_merged[0].relation, ClaimRelationType.CONFLICT)
+
+    def test_merge_prefers_non_collapsing_relation_over_duplicate_relation(self) -> None:
+        merged = StructuredClaimRelationGenerator._merge_relations(
+            [
+                ClaimRelationDraftDto(
+                    "draft:one",
+                    "draft:two",
+                    ClaimRelationType.SEMANTIC_EQUIVALENT,
+                ),
+                ClaimRelationDraftDto(
+                    "draft:one",
+                    "draft:two",
+                    ClaimRelationType.CONTEXTUAL_REPEAT,
+                ),
+            ]
+        )
+
+        self.assertEqual(merged[0].relation, ClaimRelationType.CONTEXTUAL_REPEAT)
 
     def test_candidate_blocks_compare_cross_file_paraphrases_beyond_windows(self) -> None:
         seed_drafts, evidence = _fixture()

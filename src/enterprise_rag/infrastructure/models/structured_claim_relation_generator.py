@@ -27,6 +27,18 @@ _MEANINGFUL_RELATIONS = {
     ClaimRelationType.CONTEXTUAL_REPEAT,
     ClaimRelationType.CONFLICT,
 }
+# A claim pair can be evaluated in more than one overlapping candidate batch.  Local
+# model classifications are not guaranteed to be identical across those prompts, so
+# merge disagreements conservatively instead of failing the whole document job.
+# Non-collapsing relations outrank duplicate relations, and an explicit conflict is
+# retained above every other classification so downstream validation exposes it.
+_RELATION_MERGE_PRIORITY = {
+    ClaimRelationType.CONFLICT: 0,
+    ClaimRelationType.COMPLEMENTARY: 1,
+    ClaimRelationType.CONTEXTUAL_REPEAT: 2,
+    ClaimRelationType.SEMANTIC_EQUIVALENT: 3,
+    ClaimRelationType.EXACT_DUPLICATE: 4,
+}
 # Relation output grows with the number of possible pairs, not linearly with claims.
 # The compact tuple schema keeps normal 40-claim batches within the local model's
 # output budget; unusually dense or malformed responses are split recursively.
@@ -347,9 +359,10 @@ class StructuredClaimRelationGenerator:
         for relation in relations:
             pair = frozenset((relation.left_draft_id, relation.right_draft_id))
             existing = by_pair.get(pair)
-            if existing is not None and existing.relation is not relation.relation:
-                raise revision_error("CLAIM_LEDGER_INVALID", {"reason": "relation_conflict"})
-            by_pair[pair] = relation
+            if existing is None or _RELATION_MERGE_PRIORITY[relation.relation] < (
+                _RELATION_MERGE_PRIORITY[existing.relation]
+            ):
+                by_pair[pair] = relation
         return tuple(
             sorted(
                 by_pair.values(),
