@@ -73,7 +73,6 @@ class ObserveDocument:
                 "unique_source_count": len(set(_SOURCE_CITATION.findall(markdown))),
                 "internal_reference_count": len(_INTERNAL_REFERENCE.findall(markdown)),
                 "duplicate_prose_block_count": duplicate_count,
-                "redacted_secret_count": markdown.count("[민감정보 제거]"),
             },
             "canonical_claim_owners": {
                 entry.claim_id: entry.owner_task_id for entry in plan.coverage.claim_coverage

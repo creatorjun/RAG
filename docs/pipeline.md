@@ -442,7 +442,7 @@ kind·전제조건·명령·경고가 모두 같을 때만 한 Claim으로 접�
 10. 웹이 활성화되면 충돌·버전·지원·최신성 위험 Claim을 제한된 수만 검색한다. 검색 발췌문은
     로컬 Evidence와 분리하고, 독립 검토자가 `SUPPORTED·CONTRADICTED·MIXED·INCONCLUSIVE`로
     판정한 뒤 관련 Task에만 전달한다.
-11. 조립 후 제목 계층, 내부 ref, 동일 문단, 민감한 assignment 값을 결정적으로 정리한다.
+11. 조립 후 제목 계층, 내부 ref, 동일 문단을 결정적으로 정리한다.
     Claim 소유권, 검색 태그, 예상 질의와 관찰 지표는 `control/document-observations.json`에 남긴다.
 
 ### 5.5 `OBSERVE_AND_REFINE`
@@ -453,7 +453,6 @@ kind·전제조건·명령·경고가 모두 같을 때만 한 Claim으로 접�
 - 내부 Claim·Evidence ref 잔존 수
 - 출처 인용 수와 고유 출처 수
 - 동일 정규화 문단 수와 제목 계층 이상 수
-- 민감값 치환 수
 - 웹 검토 상태·판정 분포·실제 사용한 웹 인용 수
 - Task별 Claim kind, source path, 검색 tag와 expected query
 

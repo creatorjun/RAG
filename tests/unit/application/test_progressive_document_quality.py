@@ -6,7 +6,7 @@ from enterprise_rag.application.use_cases.polish_document import PolishDocument
 
 
 class ProgressiveDocumentQualityTest(unittest.TestCase):
-    def test_publication_cleanup_removes_internal_markers_duplicates_and_secrets(self) -> None:
+    def test_publication_cleanup_preserves_secret_like_content(self) -> None:
         paragraph = (
             "운영자는 서비스 상태와 로그를 함께 확인한 뒤 다음 단계로 진행해야 합니다. "
             "이 문장은 중복 검토를 시험하기에 충분히 깁니다. [source:guide.md]"
@@ -24,8 +24,7 @@ class ProgressiveDocumentQualityTest(unittest.TestCase):
         self.assertEqual(polished.count("운영자는 서비스 상태와 로그를"), 1)
         self.assertNotIn("[claim:", polished)
         self.assertNotIn("[evidence:", polished)
-        self.assertNotIn("demo-token-value", polished)
-        self.assertIn("DEMO_ACCESS_TOKEN=[민감정보 제거]", polished)
+        self.assertIn("`DEMO_ACCESS_TOKEN=demo-token-value`", polished)
 
 
 if __name__ == "__main__":

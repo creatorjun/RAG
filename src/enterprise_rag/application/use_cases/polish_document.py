@@ -6,16 +6,6 @@ import unicodedata
 _SOURCE_CITATION = re.compile(r"\[source:([^\]\r\n]+)\]")
 _INTERNAL_EVIDENCE = re.compile(r"\[evidence:[^\]\r\n]+\]")
 _INTERNAL_CLAIM = re.compile(r"\[claim:[^\]\r\n]+\]")
-_ASSIGNED_SECRET = re.compile(
-    r"(?i)(?P<key>\b[A-Z0-9_.-]*(?:TOKEN|PASSWORD|PASSWD|SECRET|"
-    r"API[_-]?KEY|PRIVATE[_-]?KEY)[A-Z0-9_.-]*\b)"
-    r"(?P<separator>\s*[:=]\s*)(?P<quote>['\"]?)(?P<value>[^\s'\"`]+)(?P=quote)"
-)
-_JSON_SECRET = re.compile(
-    r"(?i)(?P<prefix>['\"][^'\"]*(?:TOKEN|PASSWORD|PASSWD|SECRET|"
-    r"API[_-]?KEY|PRIVATE[_-]?KEY)[^'\"]*['\"]\s*:\s*)"
-    r"(?P<quote>['\"])(?P<value>[^'\"]+)(?P=quote)"
-)
 
 
 class PolishDocument:
@@ -25,25 +15,10 @@ class PolishDocument:
         value = unicodedata.normalize("NFC", markdown.replace("\r\n", "\n").replace("\r", "\n"))
         value = _INTERNAL_EVIDENCE.sub("", value)
         value = _INTERNAL_CLAIM.sub("", value)
-        value = self._redact_secrets(value)
         value = self._deduplicate_prose_blocks(value)
         value = re.sub(r"[ \t]+\n", "\n", value)
         value = re.sub(r"\n{3,}", "\n\n", value)
         return value.strip() + "\n"
-
-    @staticmethod
-    def _redact_secrets(markdown: str) -> str:
-        replacement = "[민감정보 제거]"
-        value = _JSON_SECRET.sub(
-            lambda match: f"{match.group('prefix')}{match.group('quote')}{replacement}"
-            f"{match.group('quote')}",
-            markdown,
-        )
-        return _ASSIGNED_SECRET.sub(
-            lambda match: f"{match.group('key')}{match.group('separator')}"
-            f"{match.group('quote')}{replacement}{match.group('quote')}",
-            value,
-        )
 
     @classmethod
     def _deduplicate_prose_blocks(cls, markdown: str) -> str:
