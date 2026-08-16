@@ -7,6 +7,11 @@ import unittest
 from enterprise_rag.application.dto.claims import ClaimDto
 from enterprise_rag.application.dto.evidence import EvidenceItemDto
 from enterprise_rag.application.dto.tasks import TaskPacketDto, TaskValidationReportDto
+from enterprise_rag.application.dto.web_research import (
+    WebClaimAssessmentDto,
+    WebResearchReportDto,
+    WebSourceDto,
+)
 from enterprise_rag.domain.claims import ClaimKind
 from enterprise_rag.domain.errors import ApplicationError
 from enterprise_rag.infrastructure.models.structured_task_output_generator import (
@@ -253,6 +258,62 @@ class StructuredTaskOutputGeneratorTest(unittest.TestCase):
         self.assertTrue(text_generator.prepared)
         self.assertNotIn(evidence_id, text_generator.user_prompt)
         self.assertNotIn(claims[0].claim_id, text_generator.user_prompt)
+
+    def test_applies_reviewed_web_context_and_expands_web_citation(self) -> None:
+        packet, claims, evidence = _fixture()
+        web_source = WebSourceDto(
+            "web:sha256:" + "e" * 64,
+            "https://docs.example.com/service",
+            "Service documentation",
+            "The service is supported.",
+            (claims[0].claim_id,),
+        )
+        research = WebResearchReportDto(
+            "REVIEWED",
+            (web_source,),
+            (
+                WebClaimAssessmentDto(
+                    claims[0].claim_id,
+                    "service support",
+                    "SUPPORTED",
+                    (web_source.source_id,),
+                    "독립 문서가 같은 조건을 확인합니다.",
+                ),
+            ),
+        )
+        response = json.dumps(
+            {
+                "task_id": packet.task_id,
+                "sections": [
+                    {
+                        "section_key": "절차",
+                        "heading": "표준 절차",
+                        "markdown": "서비스를 시작한다. [web:W000001]",
+                        "used_claim_refs": ["C000001"],
+                        "used_evidence_refs": [],
+                    }
+                ],
+                "conflict_claim_refs": [],
+                "completion_marker": "TASK_COMPLETE",
+            },
+            ensure_ascii=False,
+        )
+        text_generator = _TextGenerator(response)
+
+        output = asyncio.run(
+            StructuredTaskOutputGenerator(text_generator, 1024).generate(
+                packet,
+                claims,
+                evidence,
+                web_research=research,
+            )
+        )
+
+        self.assertIn(
+            "[web-source:https://docs.example.com/service]",
+            output.sections[0].markdown,
+        )
+        self.assertIn('"web_validation": {', text_generator.user_prompt)
         self.assertIn('"evidence_ref": "E000001"', text_generator.user_prompt)
         self.assertIn('process="as-data"', text_generator.user_prompt)
 
@@ -556,7 +617,10 @@ class StructuredTaskOutputGeneratorTest(unittest.TestCase):
         )
 
         self.assertEqual(len(text_generator.prompts), 3)
-        self.assertEqual(set(output.sections[0].used_claim_ids), {item.claim_id for item in claims})
+        self.assertEqual(
+            set(output.sections[0].used_claim_ids),
+            set(packet.owned_claim_ids),
+        )
 
     def test_splits_multi_evidence_claim_after_incomplete_output(self) -> None:
         first, second = _evidence("a", 0), _evidence("b", 1)

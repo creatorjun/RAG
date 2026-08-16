@@ -430,44 +430,47 @@ kind·전제조건·명령·경고가 모두 같을 때만 한 Claim으로 접�
 3. 각 Task는 허용 Claim·Evidence와 출력 스키마를 가진 TaskPacket만 입력받는다.
 4. 출력은 섹션별 Markdown, 사용 Claim ID, Evidence ID, 충돌 목록을 포함한다.
 5. relation 연결 요소를 우선 보존해 최대 40 Claim planning batch에 packing한다.
+   배치가 독립적으로 같은 장 제목을 만들면 정규화 제목 기준으로 전역 통합하고 Claim의 단일
+   소유권과 의존성을 대표 Task로 다시 매핑한다.
 6. owned Claim이 8개를 넘는 Task는 선제 shard한다. 입력 초과·완료 표식 누락·불완전 JSON은
    Claim, section, context Claim, Evidence 순으로 최소 단위까지 재귀 분할한다.
 7. 내부 64자리 ID는 호출 한정 compact ref로 바꾸며 알 수 없는 ref는 거부한다.
 8. shard Markdown과 Claim·Evidence·conflict 집합은 코드가 결정론적으로 병합한다. LLM reduce와
    전체 자유 재작성은 금지한다.
-9. 최종 Task 검증 실패는 동일 Evidence와 오류 코드로 최대 2회 재작성한다.
+9. context Claim은 관계 이해 전용 `CONTEXT_ONLY`다. 해당 Task의 본문 Claim이나
+   `used_claim_refs`로 다시 소유할 수 없다.
+10. 웹이 활성화되면 충돌·버전·지원·최신성 위험 Claim을 제한된 수만 검색한다. 검색 발췌문은
+    로컬 Evidence와 분리하고, 독립 검토자가 `SUPPORTED·CONTRADICTED·MIXED·INCONCLUSIVE`로
+    판정한 뒤 관련 Task에만 전달한다.
+11. 조립 후 제목 계층, 내부 ref, 동일 문단, 민감한 assignment 값을 결정적으로 정리한다.
+    Claim 소유권, 검색 태그, 예상 질의와 관찰 지표는 `control/document-observations.json`에 남긴다.
 
-### 5.5 `VERIFY_CITATIONS`
+### 5.5 `OBSERVE_AND_REFINE`
 
-Markdown AST를 파싱해 사실 문장과 표 셀을 식별한다. 각 대상은 다음 검사를 통과해야 한다.
+런타임 품질 평가는 게시 gate가 아니라 관찰과 다음 실행 개선 입력이다. 다음 값은 기록하되
+문서 생성을 `NEEDS_ATTENTION`으로 바꾸지 않는다.
 
-1. 하나 이상의 claim ID 연결
-2. claim이 승인 상태 또는 내부 확정 상태
-3. 내부 quote가 source span에 존재하거나 외부 quote가 evidence snapshot에 존재
-4. artifact ACL이 모든 근거를 허용
-5. URL이 저장된 canonical URL과 일치
-6. sentence hash가 근거 매니페스트와 일치
+- 내부 Claim·Evidence ref 잔존 수
+- 출처 인용 수와 고유 출처 수
+- 동일 정규화 문단 수와 제목 계층 이상 수
+- 민감값 치환 수
+- 웹 검토 상태·판정 분포·실제 사용한 웹 인용 수
+- Task별 Claim kind, source path, 검색 tag와 expected query
 
-검사 실패 문장이 하나라도 있으면 전체 artifact는 `citation_failed`다. 자동으로 해당 문장을 삭제하거나 근거를 꾸며내지 않는다.
+웹 검색, 네트워크, 외부 판정이 실패하면 `DISABLED`, `UNAVAILABLE` 또는 `SEARCHED` 상태와
+오류 코드를 저장하고 로컬 Evidence 기반 초안을 계속 조립한다. `INCONCLUSIVE` 검색 결과로 새
+사실을 만들지 않으며 웹 발췌문이 로컬 명령·전제조건·경고를 덮어쓸 수 없다.
 
-추가로 Coverage Matrix의 필수 Claim 100%, 원본 구조 요소 배정 100%, 완료 표식, Markdown
-완결성, 코드 펜스 균형, 숨겨진 conflict 0건을 검사한다.
+### 5.6 `PUBLISH_INTEGRITY`
 
-### 5.6 `PUBLISH_GATE`
+게시는 내용 점수나 룰셋 판정이 아니라 저장 무결성만 확인한다.
 
-필수 조건:
-
-- citation failure 0
-- 근거 커버리지 100%
-- 사람 검토 필수 항목 미결 0
-- artifact generation 승인
 - 모든 파일과 매니페스트 해시 검증
-- 활성 ACL 교집합 비어 있지 않음
 - before 입력 해시 재검사 성공
 - current after run 이외의 쓰기 0건
-- Task 검증 실패 0건과 Job final quality gate 통과
+- 조립 문서 digest와 체크포인트 digest 일치
 
-게시 후보는 게이트 통과 전까지 `var/jobs/<job_id>`에 기록한다. 통과 후에만 신규 after run을
+게시 후보는 `var/jobs/<job_id>`에 기록한다. 저장 무결성 확인 후 신규 after run을
 준비하고 `documents`에 기록한다. 이후 before와 documents를 비교해
 added·modified·removed·unchanged, 전후 SHA-256, 텍스트 diff를 `_reports`에 원자적으로
 생성한다. 실패하면 기존 run과 원본을 변경하지 않는다.

@@ -98,6 +98,11 @@ Hugging Face 최신 MLX 모델 검색, 고정 commit revision, 모델 크기·�
 보이지 않으며, 실패·취소 후에는 저장된 다음 Evidence부터 재개합니다. 게시가 끝나면 최종 문서,
 품질 JSON, 비교 Markdown과 합성 보고서를 검증된 절대 경로로 열 수 있고 Task·Claim·Evidence
 coverage와 추가·수정·삭제·동일 건수를 함께 확인할 수 있습니다.
+신규 Job은 `문서 구조 보존 청킹 → Claim 단일 소유 계획 → 선택적 웹 검토 → Task 초안 →
+결정적 재조립·중복 정리 → 검색 태그와 예상 질의 기록` 순서로 품질을 점진 개선합니다. 웹 검토와
+본문 품질 지표는 실패해도 Job을 멈추지 않습니다. 내부 관찰 결과는
+`var/jobs/<job_id>/control/document-observations.json`, 웹 검색·판정은
+`var/jobs/<job_id>/control/web-research.json`에서 확인할 수 있습니다.
 주요 작업과 상태, 결과·품질, 실행 상세를 정보 중요도 순으로 분리했으며 작은 화면에서는
 카드 내용을 압축하지 않고 수직 스크롤로 확인합니다.
 

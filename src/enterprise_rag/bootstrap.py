@@ -5,12 +5,15 @@ import hashlib
 import importlib.util
 import json
 import logging
+import os
 from pathlib import Path
+from typing import cast
 
 from enterprise_rag.application.dto.desktop_settings import DesktopSettingsDto
 from enterprise_rag.application.dto.jobs import StoredDocumentJobDefinitionDto
 from enterprise_rag.application.dto.long_document import ChunkingConfigDto
 from enterprise_rag.application.ports.text_generator import TextGeneratorPort
+from enterprise_rag.application.ports.web_search import WebSearchPort
 from enterprise_rag.application.runtime import (
     Application,
     DesktopRuntimeDto,
@@ -59,6 +62,7 @@ from enterprise_rag.application.use_cases.notify_document_job_completion import 
 )
 from enterprise_rag.application.use_cases.plan_long_document import PlanLongDocument
 from enterprise_rag.application.use_cases.prepare_revision_run import PrepareRevisionRun
+from enterprise_rag.application.use_cases.research_claims_on_web import ResearchClaimsOnWeb
 from enterprise_rag.application.use_cases.run_document_job import RunDocumentJob
 from enterprise_rag.application.use_cases.start_document_job import StartDocumentJob
 from enterprise_rag.domain.context_budget import TokenBudget
@@ -109,6 +113,9 @@ from enterprise_rag.infrastructure.jobs.filesystem_task_plan_repository import (
 from enterprise_rag.infrastructure.jobs.filesystem_task_result_repository import (
     FilesystemTaskResultRepository,
 )
+from enterprise_rag.infrastructure.jobs.filesystem_web_research_repository import (
+    FilesystemWebResearchRepository,
+)
 from enterprise_rag.infrastructure.jobs.local_document_job_stages import (
     LocalDocumentJobStages,
 )
@@ -145,6 +152,9 @@ from enterprise_rag.infrastructure.models.structured_task_definition_generator i
 from enterprise_rag.infrastructure.models.structured_task_output_generator import (
     StructuredTaskOutputGenerator,
 )
+from enterprise_rag.infrastructure.models.structured_web_research_reviewer import (
+    StructuredWebResearchReviewer,
+)
 from enterprise_rag.infrastructure.notifications.macos_system_notifier import (
     MacOsSystemNotifier,
 )
@@ -158,6 +168,8 @@ from enterprise_rag.infrastructure.sources.before_text_source import BeforeTextD
 from enterprise_rag.infrastructure.tokenization.conservative_utf8 import (
     ConservativeUtf8TokenCounter,
 )
+from enterprise_rag.infrastructure.web.tavily_web_search import TavilyWebSearch
+from enterprise_rag.infrastructure.web.unavailable_web_search import UnavailableWebSearch
 from enterprise_rag.infrastructure.workspace.file_io import sha256_file
 from enterprise_rag.infrastructure.workspace.folder_revision_workspace import (
     FolderRevisionWorkspace,
@@ -433,10 +445,19 @@ def build_job_worker_application(
     plans = FilesystemTaskPlanRepository(artifacts)
     results = FilesystemTaskResultRepository(artifacts)
     finals = FilesystemFinalDocumentRepository(artifacts)
+    web_research = FilesystemWebResearchRepository(artifacts)
     definitions = FilesystemDocumentJobDefinitionRepository(artifacts)
     runner_leases = FilesystemRunnerLeaseRepository(configuration.paths.var_root)
     model_streams = FilesystemModelStreamRepository(configuration.paths.var_root)
     cancellation = ThreadCancellationToken()
+    web_search = None
+    if settings.web.enabled:
+        secret = os.environ.get(settings.web.secret_ref or "", "")
+        web_search = (
+            TavilyWebSearch(secret, settings.web.allowed_domains)
+            if secret
+            else UnavailableWebSearch()
+        )
     result_reader = FilesystemDocumentJobResultReader(
         configuration.paths.var_root,
         artifacts,
@@ -514,6 +535,15 @@ def build_job_worker_application(
         task_output_generator_factory=StructuredTaskOutputGenerator,
         file_digest=sha256_file,
         cancellation=cancellation,
+        web_research=web_research,
+        web_researcher_factory=(
+            lambda generator, budget, additional: ResearchClaimsOnWeb(
+                cast(WebSearchPort, web_search),
+                StructuredWebResearchReviewer(generator, budget, additional),
+            )
+        )
+        if web_search is not None
+        else None,
     ).stages()
     return JobWorkerApplication(
         run_document_job=RunDocumentJob(repository, repository, stages, cancellation),

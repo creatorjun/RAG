@@ -13,8 +13,11 @@ from enterprise_rag.application.ports.task_output_generator import (
 from enterprise_rag.application.ports.task_result_repository import (
     TaskResultRepositoryPort,
 )
+from enterprise_rag.application.ports.web_research_repository import (
+    WebResearchRepositoryPort,
+)
 from enterprise_rag.application.use_cases.validate_task_output import ValidateTaskOutput
-from enterprise_rag.domain.errors import revision_error
+from enterprise_rag.domain.errors import ApplicationError, revision_error
 
 
 class ExecuteTaskAttempt:
@@ -23,10 +26,12 @@ class ExecuteTaskAttempt:
         generator: TaskOutputGeneratorPort,
         results: TaskResultRepositoryPort,
         validator: ValidateTaskOutput,
+        web_research: WebResearchRepositoryPort | None = None,
     ) -> None:
         self._generator = generator
         self._results = results
         self._validator = validator
+        self._web_research = web_research
 
     async def execute(
         self,
@@ -61,12 +66,30 @@ class ExecuteTaskAttempt:
                 "TASK_PLAN_INVALID",
                 {"task_id": packet.task_id},
             ) from error
-        output = await self._generator.generate(
-            packet,
-            claims,
-            evidence_items,
-            previous_validation,
-        )
+        research = None
+        if self._web_research is not None:
+            try:
+                loaded = await self._web_research.load(job_id)
+                selected = loaded.for_claims(packet.owned_claim_ids)
+                if selected.status != "DISABLED" and selected.assessments:
+                    research = selected
+            except ApplicationError:
+                research = None
+        if research is None:
+            output = await self._generator.generate(
+                packet,
+                claims,
+                evidence_items,
+                previous_validation,
+            )
+        else:
+            output = await self._generator.generate(
+                packet,
+                claims,
+                evidence_items,
+                previous_validation,
+                research,
+            )
         await self._results.save_output(job_id, attempt, output)
         validation = self._validator.execute(packet, ledger, output)
         await self._results.save_validation(job_id, attempt, validation)

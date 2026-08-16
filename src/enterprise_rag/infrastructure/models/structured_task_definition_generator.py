@@ -247,6 +247,8 @@ class StructuredTaskDefinitionGenerator:
             "task_data를 주제 응집도가 높은 고정 Task DAG로 나눠 output_schema JSON을 작성하라.\n"
             "- 모든 claim_ref를 정확히 하나의 owned_claim_refs에 배정한다.\n"
             "- 같은 절차의 중복·보완·충돌 Claim은 가능한 한 같은 Task에 둔다.\n"
+            "- title은 문서 전체에서 재사용할 수 있는 짧고 표준적인 주제명으로 쓴다. "
+            "파일명·배치 번호·'개요' 같은 포괄어만으로 구분하지 않는다.\n"
             "- 원본 파일별 분할보다 사용자의 목적과 운영 흐름을 우선한다.\n"
             "- required_sections는 Claim 종류에 맞게 1~8개로 지정한다.\n"
             "- 순환 의존성, 자기 의존성, 알 수 없는 ID를 만들지 않는다.\n\n"

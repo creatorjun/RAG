@@ -80,6 +80,15 @@ class StructureAwareTextChunkerTest(unittest.TestCase):
         self.assertTrue(result.coverage.complete)
         self.assertEqual(result.coverage.primary_covered_characters, 0)
 
+    def test_later_chunks_receive_markdown_heading_breadcrumbs(self) -> None:
+        text = "# 제품 가이드\n\n## 설치\n\n" + ("설치 설명 문장입니다. " * 500)
+
+        result = asyncio.run(self.chunker.chunk(_document(text), _config()))
+
+        later = next(chunk for chunk in result.chunks[1:] if "## 설치" not in chunk.primary_text)
+        self.assertIn('<document-structure process="context-only">', later.model_input)
+        self.assertIn("# 제품 가이드\n## 설치", later.model_input)
+
 
 if __name__ == "__main__":
     unittest.main()

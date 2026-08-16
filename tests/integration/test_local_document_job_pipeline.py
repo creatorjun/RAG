@@ -65,6 +65,9 @@ from enterprise_rag.infrastructure.jobs.filesystem_task_plan_repository import (
 from enterprise_rag.infrastructure.jobs.filesystem_task_result_repository import (
     FilesystemTaskResultRepository,
 )
+from enterprise_rag.infrastructure.jobs.filesystem_web_research_repository import (
+    FilesystemWebResearchRepository,
+)
 from enterprise_rag.infrastructure.jobs.local_document_job_stages import (
     LocalDocumentJobStages,
 )
@@ -238,6 +241,7 @@ class LocalDocumentJobPipelineTest(unittest.TestCase):
             plans = FilesystemTaskPlanRepository(artifacts)
             results = FilesystemTaskResultRepository(artifacts)
             finals = FilesystemFinalDocumentRepository(artifacts)
+            web_research = FilesystemWebResearchRepository(artifacts)
             model_streams = FilesystemModelStreamRepository(root / "var")
             stream_ids = _Ids()
             job = DocumentJob("job-" + "1" * 32)
@@ -318,6 +322,7 @@ class LocalDocumentJobPipelineTest(unittest.TestCase):
                 task_definition_generator_factory=task_definition_factory,
                 task_output_generator_factory=task_output_factory,
                 file_digest=sha256_file,
+                web_research=web_research,
             ).stages()
 
             self.assertFalse(output_root.exists())
@@ -345,6 +350,13 @@ class LocalDocumentJobPipelineTest(unittest.TestCase):
                 artifacts.read_json(job.job_id, "control/publish-result.json")
             )
             self.assertEqual(publish_result["run_id"], job.job_id)
+            observations = asyncio.run(
+                artifacts.read_json(job.job_id, "control/document-observations.json")
+            )
+            self.assertEqual(observations["mode"], "NON_BLOCKING_OBSERVATION")
+            self.assertTrue(observations["retrieval_units"])
+            web_report = asyncio.run(web_research.load(job.job_id))
+            self.assertEqual(web_report.status, "DISABLED")
             checkpoints = FilesystemJobCheckpointInspector(
                 artifacts,
                 evidence,

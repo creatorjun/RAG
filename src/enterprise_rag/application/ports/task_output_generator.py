@@ -9,6 +9,7 @@ from enterprise_rag.application.dto.tasks import (
     TaskPacketDto,
     TaskValidationReportDto,
 )
+from enterprise_rag.application.dto.web_research import WebResearchReportDto
 
 
 class TaskOutputGeneratorPort(Protocol):
@@ -18,5 +19,6 @@ class TaskOutputGeneratorPort(Protocol):
         claims: tuple[ClaimDto, ...],
         evidence: tuple[EvidenceItemDto, ...],
         previous_validation: TaskValidationReportDto | None = None,
+        web_research: WebResearchReportDto | None = None,
     ) -> TaskOutputDto:
         raise NotImplementedError

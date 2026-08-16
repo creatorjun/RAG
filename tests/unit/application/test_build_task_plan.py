@@ -40,6 +40,37 @@ def _ledger(extra_unclaimed_evidence: bool = False) -> ClaimLedgerDto:
 
 
 class BuildTaskPlanTest(unittest.TestCase):
+    def test_consolidates_identical_topics_from_independent_plan_batches(self) -> None:
+        ledger = _ledger()
+        definitions = (
+            TaskDefinitionDto(
+                "batch-one-service",
+                "## 서비스 운영",
+                "서비스 시작 범위",
+                (ledger.claims[0].claim_id,),
+                ("시작",),
+            ),
+            TaskDefinitionDto(
+                "batch-two-service",
+                "서비스 운영",
+                "서비스 시작 후 검증 범위",
+                (ledger.claims[1].claim_id,),
+                ("검증",),
+                ("batch-one-service",),
+            ),
+        )
+
+        plan = BuildTaskPlan().execute(ledger, definitions)
+
+        self.assertEqual(len(plan.tasks), 1)
+        self.assertEqual(plan.tasks[0].title, "서비스 운영")
+        self.assertEqual(
+            set(plan.tasks[0].owned_claim_ids),
+            {item.claim_id for item in ledger.claims},
+        )
+        self.assertEqual(plan.tasks[0].required_sections, ("시작", "검증"))
+        self.assertEqual(plan.tasks[0].depends_on_task_ids, ())
+
     def test_assigns_every_claim_once_and_adds_cross_task_relation_context(self) -> None:
         ledger = _ledger()
         definitions = (

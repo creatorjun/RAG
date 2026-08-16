@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import re
+import unicodedata
+from collections.abc import Iterable
+
 from enterprise_rag.application.dto.claims import ClaimLedgerDto
 from enterprise_rag.application.dto.tasks import (
     ClaimCoverageDto,
@@ -20,6 +24,7 @@ class BuildTaskPlan:
     ) -> TaskPlanDto:
         if not definitions:
             raise revision_error("TASK_PLAN_INVALID")
+        definitions = self._consolidate_same_topic_tasks(definitions)
         definitions_by_id = {definition.task_id: definition for definition in definitions}
         if len(definitions_by_id) != len(definitions):
             raise revision_error("TASK_PLAN_INVALID")
@@ -101,6 +106,79 @@ class BuildTaskPlan:
             return TaskPlanDto(tuple(packets), coverage)
         except ValueError as error:
             raise revision_error("COVERAGE_MATRIX_INCOMPLETE") from error
+
+    @classmethod
+    def _consolidate_same_topic_tasks(
+        cls,
+        definitions: tuple[TaskDefinitionDto, ...],
+    ) -> tuple[TaskDefinitionDto, ...]:
+        """Merge identical chapter topics produced by independent planning batches.
+
+        A large ledger is planned in bounded batches.  Without a global ownership pass,
+        each batch can independently invent the same chapter and the final renderer then
+        repeats that chapter.  Consolidation changes no Claim ownership: it only moves the
+        already-owned Claims under the first canonical task for an identical normalized
+        title and remaps dependencies.
+        """
+
+        groups: dict[str, list[TaskDefinitionDto]] = {}
+        ordered_keys: list[str] = []
+        for definition in definitions:
+            key = cls._topic_key(definition.title)
+            if key not in groups:
+                groups[key] = []
+                ordered_keys.append(key)
+            groups[key].append(definition)
+
+        representative_by_task = {
+            definition.task_id: grouped[0].task_id
+            for grouped in groups.values()
+            for definition in grouped
+        }
+        consolidated: list[TaskDefinitionDto] = []
+        for key in ordered_keys:
+            grouped = groups[key]
+            representative = grouped[0]
+            claims = cls._ordered_unique(
+                claim_id for definition in grouped for claim_id in definition.owned_claim_ids
+            )
+            sections = cls._ordered_unique(
+                section for definition in grouped for section in definition.required_sections
+            )
+            dependencies = cls._ordered_unique(
+                representative_by_task.get(dependency, dependency)
+                for definition in grouped
+                for dependency in definition.depends_on_task_ids
+                if representative_by_task.get(dependency, dependency) != representative.task_id
+            )
+            objective = max(
+                (definition.objective.strip() for definition in grouped),
+                key=lambda value: (len(value), value),
+            )
+            consolidated.append(
+                TaskDefinitionDto(
+                    task_id=representative.task_id,
+                    title=cls._clean_title(representative.title),
+                    objective=objective,
+                    owned_claim_ids=claims,
+                    required_sections=sections,
+                    depends_on_task_ids=dependencies,
+                )
+            )
+        return tuple(consolidated)
+
+    @staticmethod
+    def _ordered_unique(values: Iterable[str]) -> tuple[str, ...]:
+        return tuple(dict.fromkeys(values))
+
+    @classmethod
+    def _topic_key(cls, value: str) -> str:
+        normalized = unicodedata.normalize("NFKC", cls._clean_title(value)).casefold()
+        return " ".join(normalized.split())
+
+    @staticmethod
+    def _clean_title(value: str) -> str:
+        return re.sub(r"^\s{0,3}#{1,6}\s*", "", value).strip()
 
     @staticmethod
     def _validate_dependencies(

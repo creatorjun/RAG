@@ -78,12 +78,19 @@ class StructureAwareTextChunker:
         desired_context_tokens = int(config.target_tokens * config.overlap_ratio)
         context_start = self._token_counter.suffix_start(text, start, desired_context_tokens)
         context_prefix = text[context_start:start]
-        empty_primary_input = self._render_model_input(context_prefix, "")
+        structural_context = self._heading_breadcrumb(text, start)
+        empty_primary_input = self._render_model_input(
+            context_prefix, "", structural_context
+        )
         primary_capacity = config.max_tokens - self._token_counter.count(empty_primary_input)
         if primary_capacity <= 0:
             context_start = start
             context_prefix = ""
-            empty_primary_input = self._render_model_input("", "")
+            empty_primary_input = self._render_model_input("", "", structural_context)
+            primary_capacity = config.max_tokens - self._token_counter.count(empty_primary_input)
+        if primary_capacity <= 0:
+            structural_context = ""
+            empty_primary_input = self._render_model_input("", "", "")
             primary_capacity = config.max_tokens - self._token_counter.count(empty_primary_input)
         if primary_capacity <= 0:
             raise revision_error("CHUNK_BOUNDARY", {"ordinal": ordinal})
@@ -94,11 +101,15 @@ class StructureAwareTextChunker:
         target_end = self._token_counter.prefix_end(text, start, target_capacity)
         end = self._select_boundary(text, start, target_end, maximum_end, config.minimum_tokens)
         primary_text = text[start:end]
-        model_input = self._render_model_input(context_prefix, primary_text)
+        model_input = self._render_model_input(
+            context_prefix, primary_text, structural_context
+        )
         while end > start and self._token_counter.count(model_input) > config.max_tokens:
             end -= 1
             primary_text = text[start:end]
-            model_input = self._render_model_input(context_prefix, primary_text)
+            model_input = self._render_model_input(
+                context_prefix, primary_text, structural_context
+            )
         if end <= start:
             raise revision_error("CHUNK_BOUNDARY", {"ordinal": ordinal})
         model_token_count = self._token_counter.count(model_input)
@@ -174,17 +185,39 @@ class StructureAwareTextChunker:
         return None
 
     @staticmethod
-    def _render_model_input(context_prefix: str, primary_text: str) -> str:
+    def _render_model_input(
+        context_prefix: str,
+        primary_text: str,
+        structural_context: str = "",
+    ) -> str:
+        parts: list[str] = []
+        if structural_context:
+            parts.append(
+                '<document-structure process="context-only">\n'
+                f"{structural_context}\n"
+                "</document-structure>"
+            )
         if context_prefix:
-            return (
+            parts.append(
                 '<context-prefix process="false">\n'
                 f"{context_prefix}\n"
-                "</context-prefix>\n"
-                '<primary-range process="true">\n'
-                f"{primary_text}\n"
-                "</primary-range>"
+                "</context-prefix>"
             )
-        return f'<primary-range process="true">\n{primary_text}\n</primary-range>'
+        parts.append(f'<primary-range process="true">\n{primary_text}\n</primary-range>')
+        return "\n".join(parts)
+
+    @staticmethod
+    def _heading_breadcrumb(text: str, start: int) -> str:
+        hierarchy: dict[int, str] = {}
+        for match in re.finditer(r"(?m)^\s{0,3}(#{1,6})\s+(.+?)\s*$", text[:start]):
+            level = len(match.group(1))
+            hierarchy = {
+                known_level: heading
+                for known_level, heading in hierarchy.items()
+                if known_level < level
+            }
+            hierarchy[level] = f"{'#' * level} {match.group(2).strip()}"
+        return "\n".join(hierarchy[level] for level in sorted(hierarchy))
 
     @staticmethod
     def _normalize(text: str) -> str:
@@ -270,7 +303,19 @@ class StructureAwareTextChunker:
                 )
                 expected_context = normalized[context_span.start_char : context_span.end_char]
                 contents_valid = contents_valid and context_in_bounds
-            expected_model_input = self._render_model_input(expected_context, expected_primary)
+            structural_context = self._heading_breadcrumb(normalized, span.start_char)
+            if (
+                self._token_counter.count(
+                    self._render_model_input("", "", structural_context)
+                )
+                >= config.max_tokens
+            ):
+                structural_context = ""
+            expected_model_input = self._render_model_input(
+                expected_context,
+                expected_primary,
+                structural_context,
+            )
             actual_model_tokens = self._token_counter.count(chunk.model_input)
             contents_valid = contents_valid and chunk.context_prefix == expected_context
             contents_valid = contents_valid and chunk.model_input == expected_model_input

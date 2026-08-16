@@ -243,6 +243,10 @@ _REVISION_ERROR_SPECS: dict[str, tuple[ErrorCategory, str]] = {
         ErrorCategory.TRANSIENT_NETWORK,
         "Hugging Face 모델 다운로드를 완료하지 못했습니다.",
     ),
+    "WEB_SEARCH_UNAVAILABLE": (
+        ErrorCategory.TRANSIENT_NETWORK,
+        "웹 검증 검색을 사용할 수 없습니다. 로컬 문서 생성은 계속됩니다.",
+    ),
     "MODEL_SNAPSHOT_INVALID": (
         ErrorCategory.DATA_CORRUPTION,
         "다운로드된 모델 snapshot을 검증할 수 없습니다.",

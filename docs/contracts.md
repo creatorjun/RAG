@@ -823,8 +823,9 @@ class DocumentJobLauncherPort(Protocol):
     async def launch(self, job_id: str) -> int: ...
 ```
 
-`StartDocumentJob`은 terminal·`CANCELLING`·`NEEDS_ATTENTION` Job을 거부한 뒤 launcher를
-호출한다. POSIX launcher는 Job별 non-blocking file lock을 자식 프로세스에 상속해 동일
+`StartDocumentJob`은 terminal·`CANCELLING` Job을 거부한 뒤 launcher를 호출한다. 과거 품질
+룰로 남은 `NEEDS_ATTENTION` Job은 `RUNNING_TASKS`부터 재개한다. POSIX launcher는 Job별
+non-blocking file lock을 자식 프로세스에 상속해 동일
 Job의 동시 Worker를 차단한다. process ID는 실행 요청 확인용이며 Job 상태의
 정본은 SQLite와 progress event다.
 
@@ -983,7 +984,7 @@ class CompletionNotificationState(StrEnum):
 - run 전체의 link·path escape 부재
 
 알림 정책은 Job 생성 시 저장된 `notify_on_completion`만 사용한다. `COMPLETED`와 `PUBLISHED`,
-최종 품질 통과를 확인한 뒤 게시 fingerprint에 대해 `CLAIMED` 영수증을 원자 생성한 프로세스만
+최종 문서·게시 digest 일치를 확인한 뒤 게시 fingerprint에 대해 `CLAIMED` 영수증을 원자 생성한 프로세스만
 macOS 알림을 호출한다. 다른 Worker나 GUI는 같은 영수증을 반환해 중복 호출하지 않는다.
 성공은 `DELIVERED`, 운영체제 호출 실패는 안전한 오류 코드와 `FAILED`로 기록한다. 프로세스가
 선점 직후 종료된 `CLAIMED`는 중복 방지를 위해 자동 재전송하지 않고 전달 불확실로 표시한다.

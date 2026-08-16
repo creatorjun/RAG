@@ -13,6 +13,7 @@ from enterprise_rag.application.dto.tasks import (
     TaskSectionOutputDto,
     TaskValidationReportDto,
 )
+from enterprise_rag.application.dto.web_research import WebResearchReportDto
 from enterprise_rag.application.ports.text_generator import TextGeneratorPort
 from enterprise_rag.domain.errors import ApplicationError, revision_error
 from enterprise_rag.infrastructure.models.system_prompt_policy import compose_system_prompt
@@ -23,6 +24,7 @@ _SYSTEM_PROMPT = """당신은 근거 제한형 사내 기술 문서 작성 워�
 경고, 충돌을 삭제하지 않는다. 지정된 JSON 객체 하나만 출력하고 코드 펜스나 설명을 붙이지 않는다."""
 
 _COMPACT_EVIDENCE_MARKER = re.compile(r"\[evidence:(E[0-9]{6})\]")
+_COMPACT_WEB_MARKER = re.compile(r"\[web:(W[0-9]{6})\]")
 _RECOVERABLE_GENERATION_ERRORS = {"TOKEN_BUDGET_EXCEEDED", "TASK_OUTPUT_INVALID"}
 # Eight owned Claims plus their relation context proved too easy for a local model to
 # answer with syntactically valid JSON while silently dropping one Claim.  Split at the
@@ -57,12 +59,17 @@ class StructuredTaskOutputGenerator:
         claims: tuple[ClaimDto, ...],
         evidence: tuple[EvidenceItemDto, ...],
         previous_validation: TaskValidationReportDto | None = None,
+        web_research: WebResearchReportDto | None = None,
     ) -> TaskOutputDto:
         await self._generator.prepare()
         self._validate_material(packet, claims, evidence)
         if len(packet.owned_claim_ids) >= _OWNED_CLAIM_SPLIT_THRESHOLD:
-            return await self._split_owned_claims(packet, claims, evidence, previous_validation)
-        return await self._generate_adaptive(packet, claims, evidence, previous_validation)
+            return await self._split_owned_claims(
+                packet, claims, evidence, previous_validation, web_research
+            )
+        return await self._generate_adaptive(
+            packet, claims, evidence, previous_validation, web_research
+        )
 
     async def _generate_adaptive(
         self,
@@ -70,24 +77,37 @@ class StructuredTaskOutputGenerator:
         claims: tuple[ClaimDto, ...],
         evidence: tuple[EvidenceItemDto, ...],
         previous_validation: TaskValidationReportDto | None,
+        web_research: WebResearchReportDto | None,
     ) -> TaskOutputDto:
         if len(packet.owned_claim_ids) >= _OWNED_CLAIM_SPLIT_THRESHOLD:
-            return await self._split_owned_claims(packet, claims, evidence, previous_validation)
+            return await self._split_owned_claims(
+                packet, claims, evidence, previous_validation, web_research
+            )
         try:
-            return await self._generate_once(packet, claims, evidence, previous_validation)
+            return await self._generate_once(
+                packet, claims, evidence, previous_validation, web_research
+            )
         except ApplicationError as error:
             if error.code not in _RECOVERABLE_GENERATION_ERRORS:
                 raise
             original_error = error
 
         if len(packet.owned_claim_ids) > 1:
-            return await self._split_owned_claims(packet, claims, evidence, previous_validation)
+            return await self._split_owned_claims(
+                packet, claims, evidence, previous_validation, web_research
+            )
         if len(packet.required_sections) > 1:
-            return await self._split_sections(packet, claims, evidence, previous_validation)
+            return await self._split_sections(
+                packet, claims, evidence, previous_validation, web_research
+            )
         if len(packet.context_claim_ids) > 1:
-            return await self._split_context_claims(packet, claims, evidence, previous_validation)
+            return await self._split_context_claims(
+                packet, claims, evidence, previous_validation, web_research
+            )
         if len(evidence) > 1:
-            return await self._split_evidence(packet, claims, evidence, previous_validation)
+            return await self._split_evidence(
+                packet, claims, evidence, previous_validation, web_research
+            )
         raise original_error
 
     async def _generate_once(
@@ -96,12 +116,19 @@ class StructuredTaskOutputGenerator:
         claims: tuple[ClaimDto, ...],
         evidence: tuple[EvidenceItemDto, ...],
         previous_validation: TaskValidationReportDto | None,
+        web_research: WebResearchReportDto | None,
     ) -> TaskOutputDto:
         claim_reference = {
             claim.claim_id: f"C{index:06d}" for index, claim in enumerate(claims, start=1)
         }
         evidence_reference = {
             item.evidence_id: f"E{index:06d}" for index, item in enumerate(evidence, start=1)
+        }
+        web_source_reference = {
+            source.source_id: f"W{index:06d}"
+            for index, source in enumerate(
+                web_research.sources if web_research is not None else (), start=1
+            )
         }
         try:
             raw = await self._generator.generate(
@@ -113,6 +140,8 @@ class StructuredTaskOutputGenerator:
                     previous_validation,
                     claim_reference,
                     evidence_reference,
+                    web_research,
+                    web_source_reference,
                 ),
                 self._max_output_tokens,
             )
@@ -120,7 +149,17 @@ class StructuredTaskOutputGenerator:
                 raw,
                 packet,
                 {reference: claim_id for claim_id, reference in claim_reference.items()},
+                {
+                    reference: claim_id
+                    for claim_id, reference in claim_reference.items()
+                    if claim_id in packet.owned_claim_ids
+                },
                 {reference: evidence_id for evidence_id, reference in evidence_reference.items()},
+                {
+                    source_reference: source.url
+                    for source in (web_research.sources if web_research is not None else ())
+                    for source_reference in (web_source_reference[source.source_id],)
+                },
             )
         except ApplicationError:
             raise
@@ -136,6 +175,7 @@ class StructuredTaskOutputGenerator:
         claims: tuple[ClaimDto, ...],
         evidence: tuple[EvidenceItemDto, ...],
         previous_validation: TaskValidationReportDto | None,
+        web_research: WebResearchReportDto | None,
     ) -> TaskOutputDto:
         midpoint = len(packet.owned_claim_ids) // 2
         owned_groups = (
@@ -153,6 +193,7 @@ class StructuredTaskOutputGenerator:
                     shard_claims,
                     shard_evidence,
                     previous_validation,
+                    web_research,
                 )
             )
         return self._merge_outputs(packet, tuple(outputs))
@@ -163,6 +204,7 @@ class StructuredTaskOutputGenerator:
         claims: tuple[ClaimDto, ...],
         evidence: tuple[EvidenceItemDto, ...],
         previous_validation: TaskValidationReportDto | None,
+        web_research: WebResearchReportDto | None,
     ) -> TaskOutputDto:
         midpoint = len(packet.required_sections) // 2
         outputs = []
@@ -172,7 +214,9 @@ class StructuredTaskOutputGenerator:
         ):
             shard_packet = replace(packet, required_sections=sections)
             outputs.append(
-                await self._generate_adaptive(shard_packet, claims, evidence, previous_validation)
+                await self._generate_adaptive(
+                    shard_packet, claims, evidence, previous_validation, web_research
+                )
             )
         return self._merge_outputs(packet, tuple(outputs))
 
@@ -182,6 +226,7 @@ class StructuredTaskOutputGenerator:
         claims: tuple[ClaimDto, ...],
         evidence: tuple[EvidenceItemDto, ...],
         previous_validation: TaskValidationReportDto | None,
+        web_research: WebResearchReportDto | None,
     ) -> TaskOutputDto:
         midpoint = len(packet.context_claim_ids) // 2
         outputs = []
@@ -198,6 +243,7 @@ class StructuredTaskOutputGenerator:
                     shard_claims,
                     shard_evidence,
                     previous_validation,
+                    web_research,
                 )
             )
         return self._merge_outputs(packet, tuple(outputs))
@@ -208,6 +254,7 @@ class StructuredTaskOutputGenerator:
         claims: tuple[ClaimDto, ...],
         evidence: tuple[EvidenceItemDto, ...],
         previous_validation: TaskValidationReportDto | None,
+        web_research: WebResearchReportDto | None,
     ) -> TaskOutputDto:
         midpoint = len(evidence) // 2
         outputs = []
@@ -245,6 +292,7 @@ class StructuredTaskOutputGenerator:
                     shard_claims,
                     evidence_group,
                     previous_validation,
+                    web_research,
                 )
             )
         if len(outputs) < 2:
@@ -344,6 +392,8 @@ class StructuredTaskOutputGenerator:
         previous_validation: TaskValidationReportDto | None,
         claim_reference: dict[str, str],
         evidence_reference: dict[str, str],
+        web_research: WebResearchReportDto | None,
+        web_source_reference: dict[str, str],
     ) -> str:
         payload = {
             "task": {
@@ -368,6 +418,11 @@ class StructuredTaskOutputGenerator:
             "claims": [
                 {
                     "claim_ref": claim_reference[claim.claim_id],
+                    "role": (
+                        "OWNED"
+                        if claim.claim_id in packet.owned_claim_ids
+                        else "CONTEXT_ONLY"
+                    ),
                     "kind": claim.kind.value,
                     "statement": claim.statement,
                     "evidence_refs": [evidence_reference[item] for item in claim.evidence_ids],
@@ -386,6 +441,38 @@ class StructuredTaskOutputGenerator:
                 }
                 for item in evidence
             ],
+            "web_validation": (
+                {
+                    "assessments": [
+                        {
+                            "claim_ref": claim_reference[assessment.claim_id],
+                            "verdict": assessment.verdict,
+                            "note": assessment.note,
+                            "web_source_refs": [
+                                web_source_reference[source_id]
+                                for source_id in assessment.source_ids
+                                if source_id in web_source_reference
+                            ],
+                        }
+                        for assessment in web_research.assessments
+                        if assessment.claim_id in packet.owned_claim_ids
+                        and assessment.claim_id in claim_reference
+                    ],
+                    "sources": [
+                        {
+                            "web_source_ref": web_source_reference[source.source_id],
+                            "title": source.title,
+                            "url": source.url,
+                            "published_date": source.published_date,
+                            "snippet": source.snippet,
+                        }
+                        for source in web_research.sources
+                        if source.source_id in web_source_reference
+                    ],
+                }
+                if web_research is not None and web_research.assessments
+                else None
+            ),
         }
         del previous_validation
         schema = {
@@ -394,7 +481,10 @@ class StructuredTaskOutputGenerator:
                 {
                     "section_key": "required_sections 중 정확히 하나",
                     "heading": "Markdown 제목 텍스트",
-                    "markdown": "본문. 각 근거 위치에 [evidence:E000001] 표식",
+                    "markdown": (
+                        "본문. 로컬 근거는 [evidence:E000001], 검토된 웹 근거는 "
+                        "[web:W000001] 표식"
+                    ),
                     "used_claim_refs": ["실제로 사용한 허용 Claim ref"],
                     "used_evidence_refs": ["실제로 사용한 허용 Evidence ref"],
                 }
@@ -406,11 +496,18 @@ class StructuredTaskOutputGenerator:
             "아래 task_data를 사용해 output_schema와 같은 JSON 객체를 작성하라.\n"
             "- 모든 required_sections를 정확히 한 번 작성한다.\n"
             "- 모든 owned_claim_refs와 그 Evidence를 빠짐없이 사용한다.\n"
+            "- CONTEXT_ONLY Claim은 문맥 비교용이다. 별도 사실·절차로 다시 작성하거나 "
+            "used_claim_refs에 넣지 않는다. 충돌 설명에 꼭 필요할 때만 짧게 비교한다.\n"
             "- owned Claim의 preconditions, commands, warnings는 문자와 문장부호를 "
             "바꾸지 말고 본문에 포함한다.\n"
             "- 각 section의 used_evidence_refs는 그 section 본문의 Evidence 표식과 "
             "정확히 일치시킨다.\n"
             "- [source:]나 원본 ID를 만들지 말고 짧은 Evidence ref 표식만 사용한다.\n"
+            "- web_validation이 있으면 판정과 적용 버전을 반영한다. SUPPORTED만 사실의 "
+            "독립 확인으로 쓰고, CONTRADICTED·MIXED는 차이를 명시하며, INCONCLUSIVE로 "
+            "새 사실을 만들지 않는다. 사용한 웹 발췌문에는 [web:W000001]을 붙인다.\n"
+            "- 웹 발췌문으로 로컬 Evidence의 정확한 명령·전제조건·경고를 몰래 덮어쓰지 "
+            "않는다.\n"
             "- 충돌 관계는 양쪽 Claim을 conflict_claim_refs와 본문에 노출한다.\n\n"
             '<task_data process="as-data">\n'
             + json.dumps(payload, ensure_ascii=False, sort_keys=True)
@@ -425,7 +522,9 @@ class StructuredTaskOutputGenerator:
         raw: str,
         packet: TaskPacketDto,
         claim_by_reference: dict[str, str],
+        owned_claim_by_reference: dict[str, str],
         evidence_by_reference: dict[str, str],
+        web_url_by_reference: dict[str, str],
     ) -> TaskOutputDto:
         item = cls._mapping(json.loads(raw.strip()))
         allowed_fields = {
@@ -439,7 +538,12 @@ class StructuredTaskOutputGenerator:
         if item["task_id"] != packet.task_id:
             raise ValueError("unexpected task ID")
         sections = tuple(
-            cls._section(section, claim_by_reference, evidence_by_reference)
+            cls._section(
+                section,
+                owned_claim_by_reference,
+                evidence_by_reference,
+                web_url_by_reference,
+            )
             for section in cls._list(item["sections"])
         )
         return TaskOutputDto(
@@ -457,8 +561,9 @@ class StructuredTaskOutputGenerator:
     def _section(
         cls,
         value: Any,
-        claim_by_reference: dict[str, str],
+        owned_claim_by_reference: dict[str, str],
         evidence_by_reference: dict[str, str],
+        web_url_by_reference: dict[str, str],
     ) -> TaskSectionOutputDto:
         item = cls._mapping(value)
         allowed_fields = {
@@ -475,14 +580,15 @@ class StructuredTaskOutputGenerator:
         markdown = cls._expand_evidence_markers(
             cls._string(item["markdown"]), evidence_by_reference
         )
+        markdown = cls._expand_web_markers(markdown, web_url_by_reference)
         return TaskSectionOutputDto(
             section_key=cls._string(item["section_key"]),
             heading=cls._string(item["heading"]),
             markdown=markdown,
             used_claim_ids=tuple(
-                claim_by_reference[item]
+                owned_claim_by_reference[item]
                 for item in cls._strings(item.get("used_claim_refs", []))
-                if item in claim_by_reference
+                if item in owned_claim_by_reference
             ),
             used_evidence_ids=tuple(
                 evidence_by_reference[item]
@@ -500,6 +606,20 @@ class StructuredTaskOutputGenerator:
             lambda match: (
                 f"[evidence:{evidence_by_reference[match.group(1)]}]"
                 if match.group(1) in evidence_by_reference
+                else match.group(0)
+            ),
+            markdown,
+        )
+
+    @staticmethod
+    def _expand_web_markers(
+        markdown: str,
+        web_url_by_reference: dict[str, str],
+    ) -> str:
+        return _COMPACT_WEB_MARKER.sub(
+            lambda match: (
+                f"[web-source:{web_url_by_reference[match.group(1)]}]"
+                if match.group(1) in web_url_by_reference
                 else match.group(0)
             ),
             markdown,

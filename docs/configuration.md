@@ -6,7 +6,7 @@
 - 모든 실행은 병합 완료된 설정 스냅샷을 CAS에 저장한다.
 - 실행 중 설정 파일 변경은 현재 실행에 반영하지 않는다.
 - Confluence 자격정보는 설정 스키마 자체에 존재하지 않는다.
-- 선택적 공개 웹 검색 비밀만 설정 파일 대신 Keychain 참조로 저장한다.
+- 선택적 공개 웹 검색 비밀은 설정 파일에 넣지 않고 환경 변수 이름만 참조한다.
 - 환경별 설정은 값만 바꾸며 스키마와 의미를 바꾸지 않는다.
 - 품질 임계값이 `null`이면 해당 자동 판정을 활성화하지 않는다.
 - 알 수 없는 키는 경고가 아니라 시작 오류다.
@@ -22,7 +22,9 @@
 4. 허용된 `RAG_` 환경 변수
 5. CLI의 명시적 일회성 override
 
-비밀값은 병합 대상이 아니며 웹 검색이 활성화된 경우에만 `secret_ref`를 통해 Coordinator가 조회한다. 문서 폴더 스킬과 모델 워커는 비밀 참조를 받을 수 없다. CLI override는 벤치마크와 운영자가 승인한 제한 항목에만 허용한다.
+비밀값은 병합 대상이 아니며 웹 검색이 활성화된 경우에만 `secret_ref`가 가리키는 환경 변수에서
+검색 adapter가 조회한다. API key는 모델 prompt, 로그, Job 산출물에 넣지 않는다. CLI override는
+벤치마크와 운영자가 승인한 제한 항목에만 허용한다.
 
 ### 2.1 GUI 사용자 설정과 실행 스냅샷
 
@@ -205,18 +207,7 @@ web:
   enabled: false
   provider: "disabled"
   secret_ref: null
-  policy_version: "1"
-  allow_private_content: false
   allowed_domains: []
-  maximum_results: 5
-  connect_timeout_seconds: 5
-  total_timeout_seconds: 20
-  maximum_redirects: 3
-  maximum_response_bytes: 5242880
-  allowed_content_types:
-    - "text/html"
-    - "text/plain"
-    - "application/pdf"
 
 synthesis:
   map_prompt_version: "1"
@@ -302,16 +293,18 @@ backup:
 
 ### 4.6 웹
 
-- `enabled=false`이면 provider는 `disabled`, network concurrency는 실제 스케줄러에서 0이다.
-- `enabled=true`이면 provider, secret ref, allowed domains가 비어 있을 수 없다.
-- `allow_private_content`는 모든 환경에서 false만 허용한다.
-- allowed domains에 wildcard 최상위 도메인을 허용하지 않는다.
-- URL scheme은 HTTPS만 허용한다.
+- `enabled=false`이면 provider는 `disabled`이고 외부 검색을 호출하지 않는다.
+- `enabled=true`이면 provider는 `tavily`이며 `secret_ref`에 API key 자체가 아니라 API key를
+  가진 환경 변수 이름을 쓴다. 예: `secret_ref: TAVILY_API_KEY`.
+- `allowed_domains`가 비어 있지 않으면 Tavily 요청의 include-domain 제한으로 전달한다.
+- 검색 결과 중 HTTPS URL과 비어 있지 않은 발췌문만 검토 입력으로 사용한다.
+- GUI의 오프라인 모드가 켜진 Job은 전역 웹 설정과 관계없이 `DISABLED`로 기록한다.
+- 키 누락, 네트워크 오류, 판정 실패는 문서 생성을 중단하지 않고 웹 관찰 상태로 남긴다.
 
 ### 4.7 게시
 
-- `required_evidence_coverage`는 production에서 1.0만 허용한다.
-- `require_citations`와 `require_approval`은 production에서 true만 허용한다.
+- 본문 품질 임계값, citation 통과 플래그, 자동 승인 플래그는 런타임 설정으로 제공하지 않는다.
+- 게시는 source snapshot, 문서 digest, run 경계와 비교 보고서 무결성만 확인한다.
 
 ## 5. 환경 변수 매핑
 
@@ -320,10 +313,7 @@ backup:
 | 환경 변수 | 설정 경로 | 용도 |
 | --- | --- | --- |
 | `RAG_ENVIRONMENT` | `environment` | 환경 파일 선택 |
-| `RAG_VAR_ROOT` | `paths.var_root` | 실행 데이터 루트 |
 | `RAG_LOG_LEVEL` | `logging.level` | 로그 레벨 |
-| `RAG_WEB_ENABLED` | `web.enabled` | 승인된 운영 전환 |
-| `RAG_CONFIG_FILE` | 환경 설정 파일 | 명시 설정 경로 |
 
 before·after root, 모델 ID, 모델 revision, 허용 도메인, ACL, 품질 임계값은 환경 변수로 덮어쓰지 못한다.
 

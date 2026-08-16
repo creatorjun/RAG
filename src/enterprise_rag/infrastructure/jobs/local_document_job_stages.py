@@ -15,6 +15,7 @@ from enterprise_rag.application.dto.revision import (
     GeneratedDocumentWriteDto,
     SourceDocumentRecordDto,
 )
+from enterprise_rag.application.dto.web_research import WebResearchReportDto
 from enterprise_rag.application.ports.cancellation import CancellationTokenPort
 from enterprise_rag.application.ports.claim_draft_generator import (
     ClaimDraftGeneratorPort,
@@ -51,6 +52,9 @@ from enterprise_rag.application.ports.task_result_repository import (
     TaskResultRepositoryPort,
 )
 from enterprise_rag.application.ports.text_generator import TextGeneratorPort
+from enterprise_rag.application.ports.web_research_repository import (
+    WebResearchRepositoryPort,
+)
 from enterprise_rag.application.progress import ProgressReporter
 from enterprise_rag.application.use_cases.assemble_document import AssembleDocument
 from enterprise_rag.application.use_cases.build_claim_ledger import BuildClaimLedger
@@ -70,7 +74,9 @@ from enterprise_rag.application.use_cases.extract_claim_drafts import ExtractCla
 from enterprise_rag.application.use_cases.inspect_integration_sources import (
     InspectIntegrationSources,
 )
+from enterprise_rag.application.use_cases.observe_document import ObserveDocument
 from enterprise_rag.application.use_cases.plan_document_tasks import PlanDocumentTasks
+from enterprise_rag.application.use_cases.research_claims_on_web import ResearchClaimsOnWeb
 from enterprise_rag.application.use_cases.validate_final_document import (
     ValidateFinalDocument,
 )
@@ -91,6 +97,7 @@ TaskDefinitionGeneratorFactory = Callable[
     [TextGeneratorPort, int, str], TaskDefinitionGeneratorPort
 ]
 TaskOutputGeneratorFactory = Callable[[TextGeneratorPort, int, str], TaskOutputGeneratorPort]
+WebResearcherFactory = Callable[[TextGeneratorPort, int, str], ResearchClaimsOnWeb]
 SourceFactory = Callable[[Path], TextDocumentCollectionPort]
 WorkspaceFactory = Callable[[Path, Path], DocumentWorkspacePort]
 FileDigest = Callable[[Path], str]
@@ -118,6 +125,7 @@ class _Runtime:
     extract_claims: ExtractClaimDrafts
     build_claims: BuildReviewedClaimLedger
     plan_tasks: PlanDocumentTasks
+    web_researcher: ResearchClaimsOnWeb | None
 
 
 class LocalDocumentJobStages:
@@ -144,6 +152,8 @@ class LocalDocumentJobStages:
         task_output_generator_factory: TaskOutputGeneratorFactory,
         file_digest: FileDigest,
         cancellation: CancellationTokenPort | None = None,
+        web_research: WebResearchRepositoryPort | None = None,
+        web_researcher_factory: WebResearcherFactory | None = None,
     ) -> None:
         self._artifacts = artifacts
         self._definitions = definitions
@@ -169,6 +179,8 @@ class LocalDocumentJobStages:
         self._task_output_generator_factory = task_output_generator_factory
         self._file_digest = file_digest
         self._cancellation = cancellation
+        self._web_research = web_research
+        self._web_researcher_factory = web_researcher_factory
         self._runtimes: dict[str, _Runtime] = {}
 
     def stages(self) -> tuple[DocumentJobStagePort, ...]:
@@ -232,6 +244,7 @@ class LocalDocumentJobStages:
             result_writer,
             self._results,
             ValidateTaskOutput(),
+            self._web_research,
         )
         runtime = _Runtime(
             definition=definition,
@@ -270,6 +283,15 @@ class LocalDocumentJobStages:
                     additional,
                 ),
                 BuildTaskPlan(),
+            ),
+            web_researcher=(
+                self._web_researcher_factory(
+                    self._observed_generator_factory(generator, job_id, "WEB_REVIEW"),
+                    min(output_budget, _CLAIM_RELATION_OUTPUT_CAP),
+                    additional,
+                )
+                if self._web_researcher_factory is not None
+                else None
             ),
         )
         self._runtimes[job_id] = runtime
@@ -400,6 +422,7 @@ class LocalDocumentJobStages:
     async def _plan(self, job_id: str) -> JobStageResultDto:
         existing = await self._load_optional(self._plans.load, job_id)
         if existing is not None:
+            await self._ensure_web_research(job_id)
             return JobStageResultDto(
                 "저장된 Task plan을 복원했습니다.",
                 len(existing.tasks),
@@ -415,8 +438,10 @@ class LocalDocumentJobStages:
             runtime.definition.request.instruction,
         )
         await self._plans.save(job_id, plan)
+        web_status = await self._ensure_web_research(job_id)
         return JobStageResultDto(
-            "Claim 단일 소유와 Evidence coverage를 검증해 Task plan을 확정했습니다.",
+            "Claim 단일 소유 Task plan과 선택적 웹 검증을 준비했습니다"
+            f"(web={web_status}).",
             len(plan.tasks),
             len(plan.tasks),
             "tasks",
@@ -451,7 +476,8 @@ class LocalDocumentJobStages:
             self._artifacts.read_json, job_id, "control/final-validation.json"
         )
         if report is not None:
-            await self._finals.load(job_id)
+            candidate = await self._finals.load(job_id)
+            await self._ensure_document_observations(job_id, candidate.markdown)
             return JobStageResultDto("저장된 조립 초안을 복원했습니다.", 1, 1, "drafts")
         runtime = await self._runtime(job_id)
         plan = await self._plans.load(job_id)
@@ -468,7 +494,96 @@ class LocalDocumentJobStages:
             execution,
         )
         await self._finals.save(job_id, candidate)
-        return JobStageResultDto("생성된 Task를 결정적으로 조립했습니다.", 1, 1, "drafts")
+        await self._ensure_document_observations(job_id, candidate.markdown)
+        return JobStageResultDto(
+            "생성된 Task를 조립하고 검색 태그·비차단 품질 지표를 기록했습니다.",
+            1,
+            1,
+            "drafts",
+        )
+
+    async def _ensure_document_observations(
+        self,
+        job_id: str,
+        markdown: str,
+    ) -> None:
+        existing = await self._load_optional(
+            self._artifacts.read_json,
+            job_id,
+            "control/document-observations.json",
+        )
+        if existing is not None:
+            return
+        await self._ensure_web_research(job_id)
+        runtime = await self._runtime(job_id)
+        plan = await self._plans.load(job_id)
+        ledger = await self._claims.load(job_id)
+        evidence = await self._evidence.load(job_id)
+        execution = await runtime.task_execution.load(job_id, plan)
+        observations = ObserveDocument().execute(
+            markdown,
+            plan,
+            ledger,
+            evidence,
+            execution.outputs,
+        )
+        web_report = await self._load_web_research_optional(job_id)
+        if web_report is not None:
+            observations["web_validation"] = {
+                "status": web_report.status,
+                "reviewed_claim_count": len(web_report.assessments),
+                "source_count": len(web_report.sources),
+                "verdict_counts": {
+                    verdict: sum(
+                        assessment.verdict == verdict
+                        for assessment in web_report.assessments
+                    )
+                    for verdict in (
+                        "SUPPORTED",
+                        "CONTRADICTED",
+                        "MIXED",
+                        "INCONCLUSIVE",
+                    )
+                },
+                "published_web_citation_count": markdown.count("[web-source:"),
+                "next_research_queries": [
+                    assessment.query
+                    for assessment in web_report.assessments
+                    if assessment.verdict
+                    in {"CONTRADICTED", "MIXED", "INCONCLUSIVE"}
+                ],
+                "error_codes": list(web_report.error_codes),
+            }
+        await self._write_or_verify_json(
+            job_id,
+            "control/document-observations.json",
+            {"job_id": job_id, **observations},
+        )
+
+    async def _ensure_web_research(self, job_id: str) -> str:
+        if self._web_research is None:
+            return "DISABLED"
+        existing = await self._load_web_research_optional(job_id)
+        if existing is not None:
+            return existing.status
+        runtime = await self._runtime(job_id)
+        execution = runtime.definition.request.execution_settings
+        if execution is None:
+            raise revision_error("JOB_DEFINITION_INVALID", {"job_id": job_id})
+        if execution.offline_mode or runtime.web_researcher is None:
+            report = ResearchClaimsOnWeb.disabled()
+        else:
+            ledger = await self._claims.load(job_id)
+            report = await runtime.web_researcher.execute(ledger)
+        await self._web_research.save(job_id, report)
+        return report.status
+
+    async def _load_web_research_optional(
+        self, job_id: str
+    ) -> WebResearchReportDto | None:
+        if self._web_research is None:
+            return None
+        return await self._load_optional(self._web_research.load, job_id)
 
     async def _validate_final(self, job_id: str) -> JobStageResultDto:
         candidate = await self._finals.load(job_id)

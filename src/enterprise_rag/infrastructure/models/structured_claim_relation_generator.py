@@ -431,7 +431,12 @@ class StructuredClaimRelationGenerator:
             + "- 표현만 다르고 조건·대상·결과가 같을 때만 SEMANTIC_EQUIVALENT다.\n"
             "- 서로 다른 절차 단계는 COMPLEMENTARY, 다른 문맥의 의도적 반복은 "
             "CONTEXTUAL_REPEAT다.\n"
-            "- 같은 조건에서 양립할 수 없는 값·명령·판정만 CONFLICT다.\n\n"
+            "- 같은 조건·대상·버전·목적에서 동시에 참일 수 없는 값·명령·판정만 "
+            "CONFLICT다. 한 축이라도 다르면 충돌로 단정하지 않는다.\n"
+            "- 기본값과 허용 대안, 현재 상태와 변경 금지 경고, 서로 다른 CPU·OS·버전의 "
+            "지원값, 권장값과 호환값은 CONFLICT가 아니라 COMPLEMENTARY다.\n"
+            "- DEFAULT와 LEGACY처럼 적용 모드가 다른 값도 동일 모드를 강제하는 명시적 "
+            "문장이 없는 한 CONFLICT가 아니다.\n\n"
             '<task_data process="as-data">\n'
             + json.dumps(payload, ensure_ascii=False, sort_keys=True)
             + '\n</task_data>\n\n<output_schema process="as-data">\n'
