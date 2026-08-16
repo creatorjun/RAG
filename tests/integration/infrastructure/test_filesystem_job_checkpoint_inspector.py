@@ -51,6 +51,86 @@ from enterprise_rag.infrastructure.jobs.filesystem_task_result_repository import
 
 
 class FilesystemJobCheckpointInspectorTest(unittest.TestCase):
+    def test_reports_exhausted_task_and_latest_validation_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            artifacts = FilesystemJobArtifactRepository(root / "var")
+            plans = FilesystemTaskPlanRepository(artifacts)
+            results = FilesystemTaskResultRepository(artifacts)
+            inspector = FilesystemJobCheckpointInspector(
+                artifacts,
+                FilesystemEvidenceRepository(artifacts),
+                FilesystemClaimLedgerRepository(artifacts),
+                plans,
+                results,
+                FilesystemFinalDocumentRepository(artifacts),
+            )
+            job = DocumentJob("job-" + "a" * 32)
+            asyncio.run(
+                artifacts.initialize(
+                    job,
+                    CreateDocumentJobDto(str(root), "문서 작성", "out.md", "b" * 64),
+                )
+            )
+            evidence_id = "evidence:sha256:" + "c" * 64
+            claim_id = "claim:sha256:" + "d" * 64
+            packet = TaskPacketDto(
+                "failing-task",
+                "실패 Task",
+                "실패 진단",
+                (claim_id,),
+                (),
+                (evidence_id,),
+                (),
+                ("개요",),
+                (),
+            )
+            plan = TaskPlanDto(
+                (packet,),
+                CoverageMatrixDto(
+                    (ClaimCoverageDto(claim_id, packet.task_id),),
+                    (EvidenceCoverageDto(evidence_id, (packet.task_id,)),),
+                    1,
+                    1,
+                ),
+            )
+            output = TaskOutputDto(
+                packet.task_id,
+                (
+                    TaskSectionOutputDto(
+                        "개요",
+                        "개요",
+                        f"본문 [evidence:{evidence_id}]",
+                        (claim_id,),
+                        (evidence_id,),
+                    ),
+                ),
+                (),
+                "TASK_COMPLETE",
+            )
+            asyncio.run(plans.save(job.job_id, plan))
+            for attempt in range(1, 4):
+                asyncio.run(results.save_output(job.job_id, attempt, output))
+                asyncio.run(
+                    results.save_validation(
+                        job.job_id,
+                        attempt,
+                        TaskValidationReportDto(
+                            packet.task_id,
+                            False,
+                            ("OWNED_CLAIM_MISSING",),
+                        ),
+                    )
+                )
+
+            checkpoint = asyncio.run(inspector._task_attempts_checkpoint(job.job_id))
+
+            self.assertEqual(checkpoint.status, CheckpointStatus.INVALID)
+            self.assertEqual(checkpoint.item_count, 0)
+            self.assertFalse(checkpoint.resumable)
+            self.assertIn("failing-task attempt 3/3 실패", checkpoint.detail)
+            self.assertIn("OWNED_CLAIM_MISSING", checkpoint.detail)
+
     def test_reports_verified_checkpoint_counts_and_missing_source_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()

@@ -6,6 +6,7 @@ from enterprise_rag.application.dto.job_dashboard import (
     CheckpointStatus,
     JobCheckpointDto,
 )
+from enterprise_rag.application.dto.tasks import TaskValidationReportDto
 from enterprise_rag.application.ports.claim_draft_repository import (
     ClaimDraftRepositoryPort,
 )
@@ -224,10 +225,12 @@ class FilesystemJobCheckpointInspector:
     async def _task_attempts_checkpoint(self, job_id: str) -> JobCheckpointDto:
         try:
             paths = await self._artifacts.list_relative_paths(job_id, "tasks")
+            plan = await self._plans.load(job_id)
         except ApplicationError as error:
             return self._from_error("task_attempts", "Task attempts", "tasks/", error)
         if not paths:
             return self._missing("task_attempts", "Task attempts", "tasks/")
+        planned_task_ids = {task.task_id for task in plan.tasks}
         grouped: dict[tuple[str, int], set[str]] = {}
         for path in paths:
             match = _ATTEMPT_PATH.fullmatch(path)
@@ -235,10 +238,10 @@ class FilesystemJobCheckpointInspector:
                 return self._invalid("task_attempts", "Task attempts", "tasks/")
             task_id, raw_attempt, kind = match.groups()
             attempt = int(raw_attempt)
-            if not 1 <= attempt <= 3:
+            if task_id not in planned_task_ids or not 1 <= attempt <= 3:
                 return self._invalid("task_attempts", "Task attempts", "tasks/")
             grouped.setdefault((task_id, attempt), set()).add(kind)
-        valid_count = 0
+        reports_by_task: dict[str, list[tuple[int, TaskValidationReportDto]]] = {}
         incomplete = False
         try:
             for (task_id, attempt), kinds in sorted(grouped.items()):
@@ -246,10 +249,27 @@ class FilesystemJobCheckpointInspector:
                     incomplete = True
                     continue
                 await self._results.load_output(job_id, task_id, attempt)
-                await self._results.load_validation(job_id, task_id, attempt)
-                valid_count += 1
+                report = await self._results.load_validation(job_id, task_id, attempt)
+                reports_by_task.setdefault(task_id, []).append((attempt, report))
         except ApplicationError:
             return self._invalid("task_attempts", "Task attempts", "tasks/")
+        for attempts in reports_by_task.values():
+            ordinals = [attempt for attempt, _ in attempts]
+            if ordinals != list(range(1, len(ordinals) + 1)):
+                return self._invalid("task_attempts", "Task attempts", "tasks/")
+            if any(report.valid for _, report in attempts[:-1]):
+                return self._invalid("task_attempts", "Task attempts", "tasks/")
+        attempt_count = sum(len(attempts) for attempts in reports_by_task.values())
+        latest_reports = {
+            task_id: attempts[-1][1]
+            for task_id, attempts in reports_by_task.items()
+            if attempts
+        }
+        valid_count = sum(report.valid for report in latest_reports.values())
+        failed = sorted(
+            (report for report in latest_reports.values() if not report.valid),
+            key=lambda report: report.task_id,
+        )
         if incomplete:
             return JobCheckpointDto(
                 "task_attempts",
@@ -258,14 +278,48 @@ class FilesystemJobCheckpointInspector:
                 CheckpointStatus.IN_PROGRESS,
                 valid_count,
                 valid_count > 0,
-                f"검증 저장 {valid_count}건, 미완료 attempt 있음",
+                f"Task {valid_count}/{len(plan.tasks)} 통과 · 미완료 attempt 있음",
+            )
+        if failed:
+            report = failed[0]
+            attempts = reports_by_task[report.task_id]
+            exhausted = len(attempts) >= 3
+            errors = ", ".join(report.error_codes)
+            return JobCheckpointDto(
+                "task_attempts",
+                "Task attempts",
+                "tasks/",
+                (
+                    CheckpointStatus.INVALID
+                    if exhausted
+                    else CheckpointStatus.IN_PROGRESS
+                ),
+                valid_count,
+                not exhausted,
+                (
+                    f"Task {valid_count}/{len(plan.tasks)} 통과 · "
+                    f"{report.task_id} attempt {len(attempts)}/3 실패 · {errors}"
+                ),
+            )
+        if len(latest_reports) < len(plan.tasks):
+            return JobCheckpointDto(
+                "task_attempts",
+                "Task attempts",
+                "tasks/",
+                CheckpointStatus.IN_PROGRESS,
+                valid_count,
+                True,
+                (
+                    f"Task {valid_count}/{len(plan.tasks)} 통과 · "
+                    f"attempt {attempt_count}건 저장"
+                ),
             )
         return self._saved(
             "task_attempts",
             "Task attempts",
             "tasks/",
             valid_count,
-            f"완전한 attempt {valid_count}건",
+            f"Task {valid_count}/{len(plan.tasks)} 통과 · attempt {attempt_count}건 저장",
         )
 
     async def _draft_checkpoint(self, job_id: str) -> JobCheckpointDto:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 
 from enterprise_rag.application.dto.claims import ClaimLedgerDto
@@ -17,6 +18,7 @@ from enterprise_rag.application.use_cases.execute_task_attempt import ExecuteTas
 from enterprise_rag.domain.errors import ApplicationError, revision_error
 
 TaskResumeCallback = Callable[[int, int, str, TaskValidationReportDto], None]
+LOGGER = logging.getLogger(__name__)
 
 
 class ExecuteResumableTaskPlan:
@@ -64,6 +66,20 @@ class ExecuteResumableTaskPlan:
                 latest_output = result.output
                 latest_validation = result.validation
                 total_attempts += 1
+                LOGGER.info(
+                    "document_task_attempt_completed",
+                    extra={
+                        "job_id": job_id,
+                        "task_id": packet.task_id,
+                        "task_index": task_index,
+                        "task_count": len(plan.tasks),
+                        "attempt": next_attempt,
+                        "valid": latest_validation.valid,
+                        "validation_error_codes": list(
+                            latest_validation.error_codes
+                        ),
+                    },
+                )
                 next_attempt += 1
             if latest_output is None or latest_validation is None:
                 raise revision_error("TASK_OUTPUT_INVALID", {"task_id": packet.task_id})
@@ -77,6 +93,19 @@ class ExecuteResumableTaskPlan:
                     latest_validation,
                 )
             if not latest_validation.valid:
+                LOGGER.warning(
+                    "document_task_validation_exhausted",
+                    extra={
+                        "job_id": job_id,
+                        "task_id": packet.task_id,
+                        "task_index": task_index,
+                        "task_count": len(plan.tasks),
+                        "attempt_count": next_attempt - 1,
+                        "validation_error_codes": list(
+                            latest_validation.error_codes
+                        ),
+                    },
+                )
                 break
         complete = len(outputs) == len(plan.tasks) and all(
             report.valid for report in validations

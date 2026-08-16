@@ -15,6 +15,11 @@ from enterprise_rag.application.dto.revision import (
     GeneratedDocumentWriteDto,
     SourceDocumentRecordDto,
 )
+from enterprise_rag.application.dto.tasks import (
+    TaskPlanDto,
+    TaskPlanExecutionDto,
+    TaskValidationReportDto,
+)
 from enterprise_rag.application.ports.cancellation import CancellationTokenPort
 from enterprise_rag.application.ports.claim_draft_generator import (
     ClaimDraftGeneratorPort,
@@ -429,8 +434,13 @@ class LocalDocumentJobStages:
         evidence = await self._evidence.load(job_id)
         execution = await runtime.task_execution.execute(job_id, plan, ledger, evidence)
         valid = sum(report.valid for report in execution.validations)
+        failed = next((report for report in execution.validations if not report.valid), None)
         return JobStageResultDto(
-            "Task 생성과 attempt 체크포인트 저장을 완료했습니다.",
+            (
+                "Task 생성과 attempt 체크포인트 저장을 완료했습니다."
+                if failed is None
+                else self._task_failure_message(execution, plan, failed)
+            ),
             valid,
             len(plan.tasks),
             "validated_tasks",
@@ -441,16 +451,33 @@ class LocalDocumentJobStages:
         plan = await self._plans.load(job_id)
         execution = await runtime.task_execution.load(job_id, plan)
         valid = sum(report.valid for report in execution.validations)
+        failed = next((report for report in execution.validations if not report.valid), None)
         return JobStageResultDto(
             (
                 "모든 Task 품질 검증을 통과했습니다."
                 if execution.complete
-                else "일부 Task가 최대 재작성 후에도 품질 검증을 통과하지 못했습니다."
+                else (
+                    self._task_failure_message(execution, plan, failed)
+                    if failed is not None
+                    else "Task 실행 체크포인트가 전체 계획보다 짧습니다."
+                )
             ),
             valid,
             len(plan.tasks),
             "validated_tasks",
             needs_attention=not execution.complete,
+        )
+
+    @staticmethod
+    def _task_failure_message(
+        execution: TaskPlanExecutionDto,
+        plan: TaskPlanDto,
+        failed: TaskValidationReportDto,
+    ) -> str:
+        errors = ", ".join(failed.error_codes)
+        return (
+            f"Task {len(execution.outputs)}/{len(plan.tasks)} 실행 후 "
+            f"{failed.task_id}가 최대 재작성에도 실패했습니다: {errors}"
         )
 
     async def _assemble(self, job_id: str) -> JobStageResultDto:

@@ -183,7 +183,14 @@ class RunDocumentJob:
                 )
                 LOGGER.warning(
                     "document_job_needs_attention",
-                    extra={"job_id": job_id, "stage": stage.state.value},
+                    extra={
+                        "job_id": job_id,
+                        "stage": stage.state.value,
+                        "reason": result.message,
+                        "completed": result.completed,
+                        "total": result.total,
+                        "counter_name": result.counter_name,
+                    },
                 )
                 return DocumentJobDto.from_domain(attention)
         completed = await self._jobs.transition(

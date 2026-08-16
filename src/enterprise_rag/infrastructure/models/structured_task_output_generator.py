@@ -23,8 +23,15 @@ _SYSTEM_PROMPT = """당신은 근거 제한형 사내 기술 문서 작성 워�
 경고, 충돌을 삭제하지 않는다. 지정된 JSON 객체 하나만 출력하고 코드 펜스나 설명을 붙이지 않는다."""
 
 _COMPACT_EVIDENCE_MARKER = re.compile(r"\[evidence:(E[0-9]{6})\]")
+_EXPANDED_EVIDENCE_MARKER = re.compile(
+    r"\[evidence:(evidence:sha256:[0-9a-f]{64})\]"
+)
+_SPACE_BEFORE_PUNCTUATION = re.compile(r"\s+([.!?])")
 _RECOVERABLE_GENERATION_ERRORS = {"TOKEN_BUDGET_EXCEEDED", "TASK_OUTPUT_INVALID"}
-_MAX_OWNED_CLAIMS_PER_SHARD = 8
+# Eight owned Claims plus their relation context proved too easy for a local model to
+# answer with syntactically valid JSON while silently dropping one Claim.  Split at the
+# boundary, not only after it, so that boundary becomes two four-Claim prompts.
+_OWNED_CLAIM_SPLIT_THRESHOLD = 8
 _VALIDATION_CORRECTIONS = {
     "CLAIM_PRECONDITION_MISSING": (
         "각 owned Claim의 preconditions 문자열을 문장부호까지 그대로 본문에 포함한다."
@@ -80,7 +87,7 @@ class StructuredTaskOutputGenerator:
     ) -> TaskOutputDto:
         await self._generator.prepare()
         self._validate_material(packet, claims, evidence)
-        if len(packet.owned_claim_ids) > _MAX_OWNED_CLAIMS_PER_SHARD:
+        if len(packet.owned_claim_ids) >= _OWNED_CLAIM_SPLIT_THRESHOLD:
             return await self._split_owned_claims(packet, claims, evidence, previous_validation)
         return await self._generate_adaptive(packet, claims, evidence, previous_validation)
 
@@ -91,10 +98,20 @@ class StructuredTaskOutputGenerator:
         evidence: tuple[EvidenceItemDto, ...],
         previous_validation: TaskValidationReportDto | None,
     ) -> TaskOutputDto:
-        if len(packet.owned_claim_ids) > _MAX_OWNED_CLAIMS_PER_SHARD:
+        if len(packet.owned_claim_ids) >= _OWNED_CLAIM_SPLIT_THRESHOLD:
             return await self._split_owned_claims(packet, claims, evidence, previous_validation)
         try:
-            return await self._generate_once(packet, claims, evidence, previous_validation)
+            output = await self._generate_once(packet, claims, evidence, previous_validation)
+            # DTO parsing proves that references are allowed, but it does not prove
+            # completeness.  Catch lossy multi-Claim responses here and reuse the
+            # existing recursive sharding path before an attempt checkpoint is saved.
+            if len(packet.owned_claim_ids) > 1 and not self._structurally_complete(
+                packet,
+                claims,
+                output,
+            ):
+                raise revision_error("TASK_OUTPUT_INVALID", {"task_id": packet.task_id})
+            return output
         except ApplicationError as error:
             if error.code not in _RECOVERABLE_GENERATION_ERRORS:
                 raise
@@ -109,6 +126,69 @@ class StructuredTaskOutputGenerator:
         if len(evidence) > 1:
             return await self._split_evidence(packet, claims, evidence, previous_validation)
         raise original_error
+
+    @staticmethod
+    def _structurally_complete(
+        packet: TaskPacketDto,
+        claims: tuple[ClaimDto, ...],
+        output: TaskOutputDto,
+    ) -> bool:
+        """Check lossless reference coverage before persisting a model response."""
+
+        claim_by_id = {claim.claim_id: claim for claim in claims}
+        used_claims: set[str] = set()
+        used_evidence: set[str] = set()
+        combined_markdown = StructuredTaskOutputGenerator._validation_text(
+            "\n".join(section.markdown for section in output.sections)
+        )
+        for section in output.sections:
+            section_claims = set(section.used_claim_ids)
+            section_evidence = set(section.used_evidence_ids)
+            markers = _EXPANDED_EVIDENCE_MARKER.findall(section.markdown)
+            if section.markdown.count("[evidence:") != len(markers):
+                return False
+            if set(markers) != section_evidence:
+                return False
+            for claim_id in section_claims:
+                claim = claim_by_id.get(claim_id)
+                if claim is None or not set(claim.evidence_ids).issubset(section_evidence):
+                    return False
+            used_claims.update(section_claims)
+            used_evidence.update(section_evidence)
+
+        owned_claims = set(packet.owned_claim_ids)
+        required_evidence = {
+            evidence_id
+            for claim_id in packet.owned_claim_ids
+            for evidence_id in claim_by_id[claim_id].evidence_ids
+        }
+        safety_metadata = (
+            value
+            for claim_id in packet.owned_claim_ids
+            for values in (
+                claim_by_id[claim_id].preconditions,
+                claim_by_id[claim_id].commands,
+                claim_by_id[claim_id].warnings,
+            )
+            for value in values
+        )
+        return (
+            owned_claims.issubset(used_claims)
+            and required_evidence.issubset(used_evidence)
+            and all(
+                StructuredTaskOutputGenerator._validation_text(value)
+                in combined_markdown
+                for value in safety_metadata
+            )
+        )
+
+    @staticmethod
+    def _validation_text(value: str) -> str:
+        without_markers = _EXPANDED_EVIDENCE_MARKER.sub("", value)
+        without_marker_spacing = _SPACE_BEFORE_PUNCTUATION.sub(
+            r"\1", without_markers
+        )
+        return " ".join(without_marker_spacing.split())
 
     async def _generate_once(
         self,

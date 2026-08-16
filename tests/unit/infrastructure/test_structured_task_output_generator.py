@@ -104,6 +104,41 @@ class _TruncatedThenAdaptiveTextGenerator(_AdaptiveTextGenerator):
         return await super().generate(system_prompt, user_prompt, max_output_tokens)
 
 
+class _OmittingThenAdaptiveTextGenerator(_AdaptiveTextGenerator):
+    async def generate(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        max_output_tokens: int,
+    ) -> str:
+        if self.prompts:
+            return await super().generate(system_prompt, user_prompt, max_output_tokens)
+        self.prompts.append(user_prompt)
+        payload = self._task_data(user_prompt)
+        task = payload["task"]
+        claims = payload["claims"][:-1]
+        evidence_refs = [item["evidence_ref"] for item in payload["evidence"]]
+        markers = " ".join(f"[evidence:{item}]" for item in evidence_refs)
+        return json.dumps(
+            {
+                "task_id": task["task_id"],
+                "sections": [
+                    {
+                        "section_key": section,
+                        "heading": section,
+                        "markdown": f"근거 내용 {markers}",
+                        "used_claim_refs": [item["claim_ref"] for item in claims],
+                        "used_evidence_refs": evidence_refs,
+                    }
+                    for section in task["required_sections"]
+                ],
+                "conflict_claim_refs": [],
+                "completion_marker": "TASK_COMPLETE",
+            },
+            ensure_ascii=False,
+        )
+
+
 class _DimensionLimitedTextGenerator(_AdaptiveTextGenerator):
     def __init__(self, dimension: str) -> None:
         super().__init__()
@@ -310,6 +345,80 @@ class StructuredTaskOutputGeneratorTest(unittest.TestCase):
             {claim.claim_id for claim in claims},
         )
         self.assertEqual(output.sections[0].used_evidence_ids, (evidence_id,))
+
+    def test_shards_at_exactly_eight_owned_claims(self) -> None:
+        packet, _, evidence = _fixture()
+        evidence_id = evidence[0].evidence_id
+        claims = tuple(
+            ClaimDto(
+                "claim:sha256:" + f"{index:064x}",
+                ClaimKind.FACT,
+                f"설정 항목 {index}",
+                (evidence_id,),
+            )
+            for index in range(8)
+        )
+        packet = TaskPacketDto(
+            packet.task_id,
+            packet.title,
+            packet.objective,
+            tuple(claim.claim_id for claim in claims),
+            (),
+            packet.allowed_evidence_ids,
+            (),
+            packet.required_sections,
+            (),
+        )
+        text_generator = _AdaptiveTextGenerator()
+
+        output = asyncio.run(
+            StructuredTaskOutputGenerator(text_generator, 1024).generate(
+                packet, claims, evidence
+            )
+        )
+
+        self.assertEqual(len(text_generator.prompts), 2)
+        self.assertEqual(
+            set(output.sections[0].used_claim_ids),
+            {claim.claim_id for claim in claims},
+        )
+
+    def test_shards_structurally_lossy_response_before_saving_attempt(self) -> None:
+        packet, _, evidence = _fixture()
+        evidence_id = evidence[0].evidence_id
+        claims = tuple(
+            ClaimDto(
+                "claim:sha256:" + f"{index:064x}",
+                ClaimKind.FACT,
+                f"설정 항목 {index}",
+                (evidence_id,),
+            )
+            for index in range(4)
+        )
+        packet = TaskPacketDto(
+            packet.task_id,
+            packet.title,
+            packet.objective,
+            tuple(claim.claim_id for claim in claims),
+            (),
+            packet.allowed_evidence_ids,
+            (),
+            packet.required_sections,
+            (),
+        )
+        text_generator = _OmittingThenAdaptiveTextGenerator()
+
+        output = asyncio.run(
+            StructuredTaskOutputGenerator(text_generator, 1024).generate(
+                packet, claims, evidence
+            )
+        )
+
+        self.assertEqual(len(text_generator.prompts), 3)
+        self.assertEqual(
+            set(output.sections[0].used_claim_ids),
+            {claim.claim_id for claim in claims},
+        )
 
     def test_incomplete_output_is_recursively_sharded_instead_of_repeated(self) -> None:
         packet, _, evidence = _fixture()
