@@ -25,6 +25,29 @@ _SYSTEM_PROMPT = """당신은 근거 제한형 사내 기술 문서 작성 워�
 _COMPACT_EVIDENCE_MARKER = re.compile(r"\[evidence:(E[0-9]{6})\]")
 _RECOVERABLE_GENERATION_ERRORS = {"TOKEN_BUDGET_EXCEEDED", "TASK_OUTPUT_INVALID"}
 _MAX_OWNED_CLAIMS_PER_SHARD = 8
+_VALIDATION_CORRECTIONS = {
+    "CLAIM_PRECONDITION_MISSING": (
+        "각 owned Claim의 preconditions 문자열을 문장부호까지 그대로 본문에 포함한다."
+    ),
+    "CLAIM_COMMAND_MISSING": (
+        "각 owned Claim의 commands 문자열을 문자 변경 없이 본문이나 코드 블록에 포함한다."
+    ),
+    "CLAIM_WARNING_MISSING": (
+        "각 owned Claim의 warnings 문자열을 문장부호까지 그대로 본문에 포함한다."
+    ),
+    "EVIDENCE_MARKER_MISMATCH": (
+        "각 section의 used_evidence_refs는 그 section 본문의 [evidence:...] 표식과 "
+        "정확히 같은 집합이어야 한다."
+    ),
+    "CLAIM_EVIDENCE_MISSING": (
+        "used_claim_refs에 Claim을 넣은 section에는 그 Claim의 모든 evidence_refs와 "
+        "대응 표식을 함께 넣는다."
+    ),
+    "OWNED_CLAIM_MISSING": "모든 owned_claim_refs를 한 개 이상의 section에서 사용한다.",
+    "OWNED_EVIDENCE_MISSING": (
+        "모든 owned Claim의 evidence_refs를 한 개 이상의 section 본문에서 인용한다."
+    ),
+}
 
 
 class StructuredTaskOutputGenerator:
@@ -386,6 +409,20 @@ class StructuredTaskOutputGenerator:
             "previous_validation_errors": (
                 [] if previous_validation is None else list(previous_validation.error_codes)
             ),
+            "previous_validation_corrections": (
+                []
+                if previous_validation is None
+                else [
+                    {
+                        "error_code": error_code,
+                        "correction": _VALIDATION_CORRECTIONS.get(
+                            error_code,
+                            "이전 출력의 해당 오류를 고치되 다른 검증 규칙도 모두 유지한다.",
+                        ),
+                    }
+                    for error_code in previous_validation.error_codes
+                ]
+            ),
         }
         schema = {
             "task_id": packet.task_id,
@@ -405,6 +442,12 @@ class StructuredTaskOutputGenerator:
             "아래 task_data를 사용해 output_schema와 같은 JSON 객체를 작성하라.\n"
             "- 모든 required_sections를 정확히 한 번 작성한다.\n"
             "- 모든 owned_claim_refs와 그 Evidence를 빠짐없이 사용한다.\n"
+            "- owned Claim의 preconditions, commands, warnings는 문자와 문장부호를 "
+            "바꾸지 말고 본문에 포함한다.\n"
+            "- 각 section의 used_evidence_refs는 그 section 본문의 Evidence 표식과 "
+            "정확히 일치시킨다.\n"
+            "- 재작성이라면 previous_validation_corrections를 모두 적용하고, 이미 "
+            "충족한 규칙도 유지한다.\n"
             "- [source:]나 원본 ID를 만들지 말고 짧은 Evidence ref 표식만 사용한다.\n"
             "- 충돌 관계는 양쪽 Claim을 conflict_claim_refs와 본문에 노출한다.\n\n"
             '<task_data process="as-data">\n'

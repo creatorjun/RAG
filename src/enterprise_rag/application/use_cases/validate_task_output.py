@@ -11,6 +11,7 @@ from enterprise_rag.application.dto.tasks import (
 from enterprise_rag.domain.claims import ClaimRelationType
 
 _EVIDENCE_MARKER = re.compile(r"\[evidence:(evidence:sha256:[0-9a-f]{64})\]")
+_SPACE_BEFORE_PUNCTUATION = re.compile(r"\s+([.!?])")
 
 
 class ValidateTaskOutput:
@@ -39,7 +40,9 @@ class ValidateTaskOutput:
         used_owned_claims: set[str] = set()
         used_claims: set[str] = set()
         used_evidence: set[str] = set()
-        combined_markdown = "\n".join(section.markdown for section in output.sections)
+        combined_markdown = self._validation_text(
+            "\n".join(section.markdown for section in output.sections)
+        )
         for section in output.sections:
             section_claims = set(section.used_claim_ids)
             section_evidence = set(section.used_evidence_ids)
@@ -82,11 +85,18 @@ class ValidateTaskOutput:
             claim = claim_by_id.get(claim_id)
             if claim is None:
                 continue
-            if any(value not in combined_markdown for value in claim.preconditions):
+            if any(
+                self._validation_text(value) not in combined_markdown
+                for value in claim.preconditions
+            ):
                 errors.add("CLAIM_PRECONDITION_MISSING")
-            if any(value not in combined_markdown for value in claim.commands):
+            if any(
+                self._validation_text(value) not in combined_markdown for value in claim.commands
+            ):
                 errors.add("CLAIM_COMMAND_MISSING")
-            if any(value not in combined_markdown for value in claim.warnings):
+            if any(
+                self._validation_text(value) not in combined_markdown for value in claim.warnings
+            ):
                 errors.add("CLAIM_WARNING_MISSING")
 
         required_conflicts = {
@@ -106,3 +116,18 @@ class ValidateTaskOutput:
             valid=not errors,
             error_codes=tuple(sorted(errors)),
         )
+
+    @staticmethod
+    def _validation_text(value: str) -> str:
+        """Return prose text without internal citation placement artifacts.
+
+        Evidence markers are an internal assembly contract, not part of the source
+        claim. Models commonly place a marker immediately before sentence-ending
+        punctuation. Removing it can leave an artificial space before that
+        punctuation, so whitespace is normalised without relaxing the requirement
+        that the operational detail itself remain verbatim.
+        """
+
+        without_markers = _EVIDENCE_MARKER.sub("", value)
+        without_marker_spacing = _SPACE_BEFORE_PUNCTUATION.sub(r"\1", without_markers)
+        return " ".join(without_marker_spacing.split())

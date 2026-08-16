@@ -6,7 +6,7 @@ import unittest
 
 from enterprise_rag.application.dto.claims import ClaimDto
 from enterprise_rag.application.dto.evidence import EvidenceItemDto
-from enterprise_rag.application.dto.tasks import TaskPacketDto
+from enterprise_rag.application.dto.tasks import TaskPacketDto, TaskValidationReportDto
 from enterprise_rag.domain.claims import ClaimKind
 from enterprise_rag.domain.errors import ApplicationError
 from enterprise_rag.infrastructure.models.structured_task_output_generator import (
@@ -236,6 +236,44 @@ class StructuredTaskOutputGeneratorTest(unittest.TestCase):
         with self.assertRaises(ApplicationError) as captured:
             asyncio.run(generator.generate(packet, claims, evidence))
         self.assertEqual(captured.exception.code, "TASK_OUTPUT_INVALID")
+
+    def test_retry_prompt_explains_how_to_correct_validation_errors(self) -> None:
+        packet, claims, evidence = _fixture()
+        response = json.dumps(
+            {
+                "task_id": packet.task_id,
+                "sections": [
+                    {
+                        "section_key": "절차",
+                        "heading": "표준 절차",
+                        "markdown": "서비스를 시작한다. [evidence:E000001]",
+                        "used_claim_refs": ["C000001"],
+                        "used_evidence_refs": ["E000001"],
+                    }
+                ],
+                "conflict_claim_refs": [],
+                "completion_marker": "TASK_COMPLETE",
+            },
+            ensure_ascii=False,
+        )
+        text_generator = _TextGenerator(response)
+        previous = TaskValidationReportDto(
+            packet.task_id,
+            False,
+            ("EVIDENCE_MARKER_MISMATCH",),
+        )
+
+        asyncio.run(
+            StructuredTaskOutputGenerator(text_generator, 1024).generate(
+                packet,
+                claims,
+                evidence,
+                previous,
+            )
+        )
+
+        self.assertIn('"previous_validation_corrections"', text_generator.user_prompt)
+        self.assertIn("정확히 같은 집합이어야 한다", text_generator.user_prompt)
 
     def test_proactively_shards_large_tasks_and_merges_losslessly(self) -> None:
         packet, _, evidence = _fixture()

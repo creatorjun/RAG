@@ -266,6 +266,41 @@ class ValidateAndAssembleTaskTest(unittest.TestCase):
         self.assertIn("CLAIM_COMMAND_MISSING", report.error_codes)
         self.assertIn("CLAIM_WARNING_MISSING", report.error_codes)
 
+    def test_validator_ignores_citation_before_operational_detail_punctuation(self) -> None:
+        _, ledger, plan = _fixture()
+        packet = plan.tasks[0]
+        evidence_id = packet.allowed_evidence_ids[0]
+        original = ledger.claims[0]
+        claim = ClaimDto(
+            original.claim_id,
+            original.kind,
+            original.statement,
+            original.evidence_ids,
+            preconditions=("서비스를 시작한다.",),
+        )
+        output = TaskOutputDto(
+            packet.task_id,
+            (
+                TaskSectionOutputDto(
+                    "절차",
+                    "표준 절차",
+                    f"서비스를 시작한다 [evidence:{evidence_id}].",
+                    packet.owned_claim_ids,
+                    (evidence_id,),
+                ),
+            ),
+            (),
+            "TASK_COMPLETE",
+        )
+
+        report = ValidateTaskOutput().execute(
+            packet,
+            ClaimLedgerDto((claim,), ledger.relations, ledger.reviewed_evidence_ids),
+            output,
+        )
+
+        self.assertTrue(report.valid)
+
     def test_assembler_uses_planned_section_order_not_model_array_order(self) -> None:
         evidence, ledger, base_plan = _fixture()
         packet = base_plan.tasks[0]
