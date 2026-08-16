@@ -199,8 +199,8 @@
 | `PlanDocumentTasks` | Claim Ledger, 요구사항 | Coverage Matrix, TaskPacket | 계획 확정 |
 | `ExecuteDocumentTask` | TaskPacket | TaskOutput | Task attempt |
 | `ValidateDocumentTask` | TaskPacket, TaskOutput | 검증 보고서 | Task attempt |
-| `AssembleDocument` | 검증된 TaskOutput | Markdown 후보 | Job artifact |
-| `PublishDocumentJob` | 품질 게이트 통과 Job | revision run | after run 생성·비교 |
+| `AssembleDocument` | 생성된 TaskOutput | Markdown 후보 | Job artifact |
+| `PublishDocumentJob` | 조립 완료 Job | revision run | after run 생성·비교 |
 
 ### 3.2 애플리케이션 서비스
 
@@ -215,8 +215,8 @@
 비즈니스 알고리즘을 직접 구현하지 않고 유스케이스와 포트를 조정한다.
 
 대화 기록을 상태로 사용하지 않으며 JobRepository, ArtifactRepository, ProgressEventPublisher를
-통해 모든 체크포인트를 명시적으로 저장한다. 품질 게이트 전 FolderRevisionWorkspace 호출을
-금지한다.
+통해 모든 체크포인트를 명시적으로 저장한다. FolderRevisionWorkspace 게시 전에는 파일 digest와
+Job ID 등 저장 무결성을 확인하며 품질 지표는 게시를 차단하지 않는다.
 
 #### `TaskPlanner`
 
@@ -226,7 +226,7 @@
 
 #### `DeterministicDocumentAssembler`
 
-- 검증된 Task 섹션만 입력 허용
+- 생성된 Task 섹션을 입력으로 허용하고 부분 결과도 보존
 - 제목, 목차, 번호, 출처, 원본 목록을 결정적으로 렌더링
 - 전체 문서 모델 재작성 호출 금지
 

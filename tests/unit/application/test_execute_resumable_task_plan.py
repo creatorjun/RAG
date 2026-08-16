@@ -56,14 +56,13 @@ def _output(task_id: str) -> TaskOutputDto:
 
 
 class ExecuteResumableTaskPlanTest(unittest.TestCase):
-    def test_reuses_failed_attempt_and_generates_only_next_attempt(self) -> None:
+    def test_reuses_legacy_failed_attempt_without_regeneration(self) -> None:
         task_id = "task-one"
         output = _output(task_id)
         failed = TaskValidationReportDto(task_id, False, ("MISSING",))
-        valid = TaskValidationReportDto(task_id, True, ())
         results = _Results()
         results.values[(task_id, 1)] = (output, failed)
-        attempts = _Attempts(results, ((output, valid),))
+        attempts = _Attempts(results, ())
         runner = ExecuteResumableTaskPlan(attempts, results, 3)
 
         class _Packet:
@@ -78,8 +77,9 @@ class ExecuteResumableTaskPlanTest(unittest.TestCase):
         )
         self.assertIsInstance(execution, TaskPlanExecutionDto)
         self.assertTrue(execution.complete)
-        self.assertEqual(execution.total_attempt_count, 2)
-        self.assertEqual(attempts.calls, [2])
+        self.assertEqual(execution.total_attempt_count, 1)
+        self.assertEqual(execution.validations, (TaskValidationReportDto(task_id, True, ()),))
+        self.assertEqual(attempts.calls, [])
 
     def test_rejects_attempt_gap(self) -> None:
         task_id = "task-one"

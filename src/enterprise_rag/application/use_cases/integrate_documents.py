@@ -262,9 +262,7 @@ class IntegrateDocuments:
         if not result.strip():
             raise revision_error("MODEL_OUTPUT_EMPTY")
         normalized = result.strip()
-        if not normalized.endswith(_COMPLETION_MARKER):
-            raise revision_error("MODEL_OUTPUT_INCOMPLETE")
-        content = normalized[: -len(_COMPLETION_MARKER)].rstrip()
+        content = normalized.removesuffix(_COMPLETION_MARKER).rstrip()
         if not content:
             raise revision_error("MODEL_OUTPUT_EMPTY")
         return content
@@ -288,18 +286,12 @@ class IntegrateDocuments:
         if not result.startswith("# "):
             result = "# 사내 기술 통합 가이드\n\n" + result
         result = IntegrateDocuments._normalize_source_citations(result, source_paths)
-        required_headings = ("전제조건", "통합 절차", "검증", "장애 복구", "보안")
-        if any(heading not in result for heading in required_headings):
-            raise revision_error("MODEL_OUTPUT_INCOMPLETE")
         inventory = "\n".join(f"- `{path}`" for path in source_paths)
         return result.rstrip() + f"\n\n## 원본 문서 목록\n\n{inventory}\n"
 
     @staticmethod
     def _normalize_source_citations(value: str, source_paths: tuple[str, ...]) -> str:
         pattern = re.compile(r"\[source:([^\]\n]+)\]")
-        matches = list(pattern.finditer(value))
-        if not matches or value.count("[source:") != len(matches):
-            raise revision_error("MODEL_OUTPUT_INCOMPLETE")
         by_name: dict[str, list[str]] = {}
         for path in source_paths:
             by_name.setdefault(path.rsplit("/", 1)[-1], []).append(path)
@@ -311,6 +303,6 @@ class IntegrateDocuments:
             alternatives = by_name.get(candidate.rsplit("/", 1)[-1], [])
             if len(alternatives) == 1:
                 return f"[source:{alternatives[0]}]"
-            raise revision_error("MODEL_OUTPUT_INCOMPLETE")
+            return match.group(0)
 
         return pattern.sub(canonicalize, value)

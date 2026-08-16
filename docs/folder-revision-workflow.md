@@ -220,12 +220,12 @@ python skills/manage-document-revisions/scripts/compare_run.py --before-root dat
 rag document integrate
 ```
 
-이 명령은 현재 최소 수직 슬라이스의 호환 명령이다. 완료 표식·출처·필수 구조 검증을 통과한
-뒤에만 자동 run ID를 생성하고 `documents/integrated-technical-guide.md`를 추가해 compare를
-실행한다. 자동 finalize는 하지 않는다.
+이 명령은 현재 최소 수직 슬라이스의 호환 명령이다. 비어 있지 않은 모델 결과를 받아 자동 run
+ID를 생성하고 `documents/integrated-technical-guide.md`를 추가해 compare를 실행한다. 완료 표식,
+출처와 필수 제목은 게시 조건이 아니며 자동 finalize는 하지 않는다.
 
 목표 워크플로는 `rag job create` 또는 GUI가 원본 스냅샷과 Job을 만들고, Evidence·Claim·Task
-결과를 `var/jobs/<job_id>`에서 검증한 다음 품질 게이트 통과 후에만 신규 revision run을
+결과를 `var/jobs/<job_id>`에 체크포인트하고 품질 지표를 기록한 다음 신규 revision run을
 준비한다. 자세한 계약은 [orchestration-workflow.md](orchestration-workflow.md)를 따른다.
 
 ## 13. 오류와 운영 조치

@@ -110,7 +110,7 @@ class DocumentJobOrchestratorTest(unittest.TestCase):
             )
             self.assertEqual([stage.calls for stage in stages], [1] * len(stages))
 
-    def test_stops_at_needs_attention_after_validation_event(self) -> None:
+    def test_quality_advisory_does_not_stop_pipeline(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             repository = SqliteDocumentJobRepository(
                 Path(temporary).resolve() / "metadata.sqlite3",
@@ -129,10 +129,12 @@ class DocumentJobOrchestratorTest(unittest.TestCase):
                 RunDocumentJob(repository, repository, stages).execute(job.job_id)
             )
 
-            self.assertEqual(result.state, DocumentJobState.NEEDS_ATTENTION)
-            validating_index = _ACTIVE_STATES.index(DocumentJobState.VALIDATING_TASKS)
-            self.assertEqual(sum(stage.calls for stage in stages), validating_index + 1)
-            self.assertEqual(len(asyncio.run(repository.list_after(job.job_id))), 7)
+            self.assertEqual(result.state, DocumentJobState.COMPLETED)
+            self.assertEqual(sum(stage.calls for stage in stages), len(_ACTIVE_STATES))
+            self.assertEqual(
+                len(asyncio.run(repository.list_after(job.job_id))),
+                len(_ACTIVE_STATES),
+            )
 
     def test_marks_job_failed_when_stage_raises_application_error(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -199,10 +201,10 @@ class DocumentJobOrchestratorTest(unittest.TestCase):
             )
             self.assertEqual(
                 asyncio.run(runner.execute(attention.job_id)).state,
-                DocumentJobState.NEEDS_ATTENTION,
+                DocumentJobState.COMPLETED,
             )
 
-    def test_rejects_attention_from_non_validation_stage_and_wraps_unknown_error(self) -> None:
+    def test_ignores_quality_advisory_and_wraps_unknown_error(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             repository = SqliteDocumentJobRepository(
                 Path(temporary).resolve() / "metadata.sqlite3",
@@ -216,15 +218,14 @@ class DocumentJobOrchestratorTest(unittest.TestCase):
                 _Stage(state, needs_attention=state is DocumentJobState.INSPECTING)
                 for state in _ACTIVE_STATES
             )
-            with self.assertRaises(ApplicationError) as captured:
-                asyncio.run(
-                    RunDocumentJob(
-                        repository,
-                        repository,
-                        attention_stages,
-                    ).execute(invalid_attention.job_id)
-                )
-            self.assertEqual(captured.exception.code, "JOB_STATE_CONFLICT")
+            result = asyncio.run(
+                RunDocumentJob(
+                    repository,
+                    repository,
+                    attention_stages,
+                ).execute(invalid_attention.job_id)
+            )
+            self.assertEqual(result.state, DocumentJobState.COMPLETED)
 
             failure_stages = tuple(
                 _Stage(

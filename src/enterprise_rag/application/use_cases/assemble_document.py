@@ -32,7 +32,6 @@ class AssembleDocument:
             or len(report_by_task) != len(validations)
             or set(output_by_task) != task_ids
             or set(report_by_task) != task_ids
-            or any(not report.valid for report in validations)
         ):
             raise revision_error("DOCUMENT_ASSEMBLY_FAILED")
         path_by_evidence = {
@@ -45,16 +44,24 @@ class AssembleDocument:
                 section.section_key: section for section in output.sections
             }
             parts.append(f"## {task.title}")
-            for section_key in task.required_sections:
-                section = section_by_key.get(section_key)
-                if section is None:
-                    raise revision_error("DOCUMENT_ASSEMBLY_FAILED")
+            ordered_keys = [
+                section_key
+                for section_key in task.required_sections
+                if section_key in section_by_key
+            ]
+            ordered_keys.extend(
+                section.section_key
+                for section in output.sections
+                if section.section_key not in ordered_keys
+            )
+            for section_key in ordered_keys:
+                section = section_by_key[section_key]
                 rendered = _EVIDENCE_MARKER.sub(
-                    lambda match: self._citation(match.group(1), path_by_evidence),
+                    lambda match: self._citation(
+                        match.group(0), match.group(1), path_by_evidence
+                    ),
                     section.markdown.strip(),
                 )
-                if "[evidence:" in rendered or "[source:" not in rendered:
-                    raise revision_error("DOCUMENT_ASSEMBLY_FAILED")
                 parts.append(f"### {section.heading}\n\n{rendered}")
         included_evidence = {
             entry.evidence_id for entry in plan.coverage.evidence_coverage
@@ -71,8 +78,8 @@ class AssembleDocument:
         return "\n\n".join(parts).rstrip() + "\n"
 
     @staticmethod
-    def _citation(evidence_id: str, paths: dict[str, str]) -> str:
+    def _citation(marker: str, evidence_id: str, paths: dict[str, str]) -> str:
         path = paths.get(evidence_id)
         if path is None:
-            raise revision_error("DOCUMENT_ASSEMBLY_FAILED")
+            return marker
         return f"[source:{path}]"

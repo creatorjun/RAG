@@ -14,7 +14,6 @@ from enterprise_rag.application.use_cases.inspect_integration_sources import (
 )
 from enterprise_rag.application.use_cases.integrate_documents import IntegrateDocuments
 from enterprise_rag.domain.context_budget import TokenBudget
-from enterprise_rag.domain.errors import ApplicationError
 from enterprise_rag.infrastructure.chunking.structure_aware_text_chunker import (
     StructureAwareTextChunker,
 )
@@ -102,12 +101,20 @@ class _IncompleteTextGenerator:
 
 
 class DocumentIntegrationPipelineTest(unittest.TestCase):
-    def test_rejects_generation_without_completion_marker(self) -> None:
+    def test_accepts_generation_without_completion_marker(self) -> None:
         use_case = object.__new__(IntegrateDocuments)
         use_case._generator = _IncompleteTextGenerator()
-        with self.assertRaises(ApplicationError) as captured:
-            asyncio.run(use_case._generate("prompt", 128))
-        self.assertEqual(captured.exception.code, "MODEL_OUTPUT_INCOMPLETE")
+        generated = asyncio.run(use_case._generate("prompt", 128))
+        self.assertEqual(generated, "잘린 모델 출력 [source:guide.md")
+
+    def test_accepts_missing_headings_and_citations(self) -> None:
+        normalized = IntegrateDocuments._normalize_markdown(
+            "간결한 통합 결과",
+            ("guide.md",),
+        )
+        self.assertIn("# 사내 기술 통합 가이드", normalized)
+        self.assertIn("간결한 통합 결과", normalized)
+        self.assertIn("## 원본 문서 목록", normalized)
 
     def test_creates_integrated_document_and_comparison_in_one_use_case(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

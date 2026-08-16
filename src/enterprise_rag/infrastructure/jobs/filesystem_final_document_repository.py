@@ -37,13 +37,13 @@ class FilesystemFinalDocumentRepository:
         except ApplicationError as error:
             if error.code == "JOB_ARTIFACT_NOT_FOUND":
                 raise revision_error(
-                    "FINAL_QUALITY_GATE_FAILED",
+                    "FINAL_ARTIFACT_INVALID",
                     {"job_id": job_id},
                 ) from error
             raise
         except (KeyError, TypeError, ValueError) as error:
             raise revision_error(
-                "FINAL_QUALITY_GATE_FAILED",
+                "FINAL_ARTIFACT_INVALID",
                 {"job_id": job_id},
             ) from error
 
@@ -56,7 +56,7 @@ class FilesystemFinalDocumentRepository:
             existing = await self._artifacts.read_text(job_id, _DRAFT_PATH)
             if existing != markdown:
                 raise revision_error(
-                    "FINAL_QUALITY_GATE_FAILED",
+                    "FINAL_ARTIFACT_INVALID",
                     {"job_id": job_id},
                 ) from error
             return _DRAFT_PATH
@@ -88,7 +88,7 @@ class FilesystemFinalDocumentRepository:
             existing = await self._artifacts.read_json(job_id, _VALIDATION_PATH)
             if existing != value:
                 raise revision_error(
-                    "FINAL_QUALITY_GATE_FAILED",
+                    "FINAL_ARTIFACT_INVALID",
                     {"job_id": job_id},
                 ) from error
             return _VALIDATION_PATH

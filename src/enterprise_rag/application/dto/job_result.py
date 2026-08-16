@@ -83,8 +83,6 @@ class DocumentJobResultDto:
             return
         if any(value is None for value in published_values):
             raise ValueError("published result is incomplete")
-        if not self.quality.valid:
-            raise ValueError("published result requires valid quality")
         if not _SHA256.fullmatch(self.comparison_report_sha256 or ""):
             raise ValueError("invalid comparison report digest")
         if not _SHA256.fullmatch(self.publication_fingerprint or ""):

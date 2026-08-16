@@ -39,20 +39,18 @@ flowchart TD
     Y --> AA["BUILD_CLAIM_LEDGER"]
     AA --> AB["PLAN_TASKS"]
     AB --> AC["EXECUTE_TASKS"]
-    AC --> AH["VALIDATE_TASKS"]
+    AC --> AH["RECORD_TASK_METRICS"]
     AH --> AI["ASSEMBLE_DOCUMENT"]
-    AI --> AJ["VERIFY_CITATIONS_AND_COVERAGE"]
-    AJ --> AD{"PUBLISH_GATE"}
-    AD -->|"pass"| PRE["PREPARE_REVISION_RUN"]
+    AI --> AJ["RECORD_QUALITY_METRICS"]
+    AJ --> PRE["PREPARE_REVISION_RUN"]
     PRE --> AE["PUBLISH_GENERATION"]
     AE --> AG["COMPARE_AND_FINALIZE"]
-    AD -->|"fail"| AF["REVIEW_ARTIFACT"]
 ```
 
-`CREATE_JOB`, `PLAN_TASKS`, 품질 게이트, `PREPARE_REVISION_RUN`, 게시,
+`CREATE_JOB`, `PLAN_TASKS`, 품질 지표 기록, `PREPARE_REVISION_RUN`, 게시,
 `COMPARE_AND_FINALIZE`는 Coordinator가 수행한다. Track A는 `DISCOVER`부터
-`BUILD_VECTOR_GENERATION`까지고 Track B는 Claim 추출, Task 실행과 의미 검증을 수행한다.
-게시 run은 품질 게이트 통과 후에만 준비한다.
+`BUILD_VECTOR_GENERATION`까지고 Track B는 Claim 추출, Task 실행과 품질 관찰을 수행한다.
+게시 run은 조립 결과와 저장 무결성을 확인한 뒤 준비하며 품질 점수는 이를 차단하지 않는다.
 
 ## 2. 공통 단계 계약
 

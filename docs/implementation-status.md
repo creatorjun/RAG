@@ -25,7 +25,7 @@ BGE-M3, FAISS, 파서 의존성은 대상 Mac 실측과 라이선스 검토가 �
 | 계층 | 구현 내용 |
 | --- | --- |
 | Domain | 오류·값 객체, 리비전 상태, DocumentJob 상태 머신·진행 불변 조건 |
-| Application | revision·Job·모델 카탈로그 관리, Evidence·Claim·Task 계획/실행/검증, 결정적 조립과 최종 품질 게이트, 실행 계약·공통 취소/알림 정책 |
+| Application | revision·Job·모델 카탈로그 관리, Evidence·Claim·Task 계획/실행, 결정적 조립과 비차단 품질 지표, 실행 계약·공통 취소/알림 정책 |
 | Infrastructure | 설정 loader, Hugging Face 카탈로그, MLX·구조화 생성·stream 관측 어댑터, SQLite Job/Event, write-once Job·Claim draft·Task·최종 게이트 저장소, mutable runner lease, 폴더 workspace |
 | Presentation | Application 실행 계약만 받는 `rag` controller, Job Worker controller, `rag-gui` View/ViewModel |
 | Composition | `bootstrap.py` 단일 구체 조립 지점, Presentation factory 주입과 명시적 close 경계 |

@@ -31,7 +31,7 @@ class BuildFinalDocumentCandidate:
         evidence: EvidenceBundleDto,
         execution: TaskPlanExecutionDto,
     ) -> FinalDocumentCandidateDto:
-        if not execution.complete or len(execution.outputs) != len(plan.tasks):
+        if len(execution.outputs) != len(plan.tasks):
             raise revision_error("DOCUMENT_ASSEMBLY_FAILED")
         markdown = self._assembler.execute(
             title,

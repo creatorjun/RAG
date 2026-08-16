@@ -15,11 +15,6 @@ from enterprise_rag.application.dto.revision import (
     GeneratedDocumentWriteDto,
     SourceDocumentRecordDto,
 )
-from enterprise_rag.application.dto.tasks import (
-    TaskPlanDto,
-    TaskPlanExecutionDto,
-    TaskValidationReportDto,
-)
 from enterprise_rag.application.ports.cancellation import CancellationTokenPort
 from enterprise_rag.application.ports.claim_draft_generator import (
     ClaimDraftGeneratorPort,
@@ -433,51 +428,22 @@ class LocalDocumentJobStages:
         ledger = await self._claims.load(job_id)
         evidence = await self._evidence.load(job_id)
         execution = await runtime.task_execution.execute(job_id, plan, ledger, evidence)
-        valid = sum(report.valid for report in execution.validations)
-        failed = next((report for report in execution.validations if not report.valid), None)
         return JobStageResultDto(
-            (
-                "Task 생성과 attempt 체크포인트 저장을 완료했습니다."
-                if failed is None
-                else self._task_failure_message(execution, plan, failed)
-            ),
-            valid,
+            "Task 출력을 생성하고 체크포인트에 저장했습니다.",
+            len(execution.outputs),
             len(plan.tasks),
-            "validated_tasks",
+            "generated_tasks",
         )
 
     async def _validate_tasks(self, job_id: str) -> JobStageResultDto:
         runtime = await self._runtime(job_id)
         plan = await self._plans.load(job_id)
         execution = await runtime.task_execution.load(job_id, plan)
-        valid = sum(report.valid for report in execution.validations)
-        failed = next((report for report in execution.validations if not report.valid), None)
         return JobStageResultDto(
-            (
-                "모든 Task 품질 검증을 통과했습니다."
-                if execution.complete
-                else (
-                    self._task_failure_message(execution, plan, failed)
-                    if failed is not None
-                    else "Task 실행 체크포인트가 전체 계획보다 짧습니다."
-                )
-            ),
-            valid,
+            "Task 출력 체크포인트를 확인했습니다. 품질 지표는 실행을 차단하지 않습니다.",
+            len(execution.outputs),
             len(plan.tasks),
-            "validated_tasks",
-            needs_attention=not execution.complete,
-        )
-
-    @staticmethod
-    def _task_failure_message(
-        execution: TaskPlanExecutionDto,
-        plan: TaskPlanDto,
-        failed: TaskValidationReportDto,
-    ) -> str:
-        errors = ", ".join(failed.error_codes)
-        return (
-            f"Task {len(execution.outputs)}/{len(plan.tasks)} 실행 후 "
-            f"{failed.task_id}가 최대 재작성에도 실패했습니다: {errors}"
+            "generated_tasks",
         )
 
     async def _assemble(self, job_id: str) -> JobStageResultDto:
@@ -502,21 +468,16 @@ class LocalDocumentJobStages:
             execution,
         )
         await self._finals.save(job_id, candidate)
-        return JobStageResultDto("검증된 Task를 결정적으로 조립했습니다.", 1, 1, "drafts")
+        return JobStageResultDto("생성된 Task를 결정적으로 조립했습니다.", 1, 1, "drafts")
 
     async def _validate_final(self, job_id: str) -> JobStageResultDto:
         candidate = await self._finals.load(job_id)
         quality = candidate.quality
         return JobStageResultDto(
-            (
-                "최종 Claim·Evidence·source 품질 게이트를 통과했습니다."
-                if quality.valid
-                else "최종 문서가 품질 게이트를 통과하지 못했습니다."
-            ),
+            "최종 문서 품질 지표를 기록했습니다. 결과 게시를 차단하지 않습니다.",
             quality.validated_task_count,
             max(1, quality.task_count),
-            "validated_tasks",
-            needs_attention=not quality.valid,
+            "generated_tasks",
         )
 
     async def _publish(self, job_id: str) -> JobStageResultDto:
@@ -530,7 +491,7 @@ class LocalDocumentJobStages:
                 or not isinstance(report_digest, str)
                 or not _SHA256.fullmatch(report_digest)
             ):
-                raise revision_error("FINAL_QUALITY_GATE_FAILED", {"job_id": job_id})
+                raise revision_error("FINAL_ARTIFACT_INVALID", {"job_id": job_id})
             count = self._integer(existing.get("file_count"))
             return JobStageResultDto(
                 "저장된 게시 run을 복원했습니다.", count, max(1, count), "files"
@@ -540,8 +501,6 @@ class LocalDocumentJobStages:
         if execution_settings is None:
             raise revision_error("JOB_DEFINITION_INVALID", {"job_id": job_id})
         candidate = await self._finals.load(job_id)
-        if not candidate.quality.valid:
-            raise revision_error("FINAL_QUALITY_GATE_FAILED", {"job_id": job_id})
         evidence = await self._evidence.load(job_id)
         workspace = self._workspace_factory(
             Path(runtime.definition.request.source_root),
@@ -577,7 +536,7 @@ class LocalDocumentJobStages:
         }
         await self._write_or_verify_json(job_id, _PUBLISH_RESULT, value)
         return JobStageResultDto(
-            "품질 게이트를 통과한 문서를 신규 검토 run에 게시했습니다.",
+            "생성된 문서를 신규 검토 run에 게시했습니다.",
             len(comparison.files),
             max(1, len(comparison.files)),
             "files",
@@ -587,7 +546,7 @@ class LocalDocumentJobStages:
         try:
             return self._file_digest(path)
         except OSError as error:
-            raise revision_error("FINAL_QUALITY_GATE_FAILED") from error
+            raise revision_error("FINAL_ARTIFACT_INVALID") from error
 
     async def _write_or_verify_output(
         self,
@@ -630,19 +589,19 @@ class LocalDocumentJobStages:
                 or hashlib.sha256(target.read_bytes()).hexdigest() != expected_digest
             ):
                 raise revision_error(
-                    "FINAL_QUALITY_GATE_FAILED", {"job_id": definition.job_id}
+                    "FINAL_ARTIFACT_INVALID", {"job_id": definition.job_id}
                 ) from error
             run_root = Path(execution.output_root) / "runs" / definition.job_id
             report = run_root / "_reports/synthesis.json"
             if not report.is_file():
                 raise revision_error(
-                    "FINAL_QUALITY_GATE_FAILED", {"job_id": definition.job_id}
+                    "FINAL_ARTIFACT_INVALID", {"job_id": definition.job_id}
                 ) from error
             try:
                 synthesis = json.loads(report.read_text(encoding="utf-8"))
             except (OSError, UnicodeDecodeError, json.JSONDecodeError) as parse_error:
                 raise revision_error(
-                    "FINAL_QUALITY_GATE_FAILED", {"job_id": definition.job_id}
+                    "FINAL_ARTIFACT_INVALID", {"job_id": definition.job_id}
                 ) from parse_error
             if (
                 not isinstance(synthesis, dict)
@@ -654,7 +613,7 @@ class LocalDocumentJobStages:
                 or synthesis.get("model_revision") != execution.model_revision
             ):
                 raise revision_error(
-                    "FINAL_QUALITY_GATE_FAILED", {"job_id": definition.job_id}
+                    "FINAL_ARTIFACT_INVALID", {"job_id": definition.job_id}
                 ) from error
 
     def _source(self, definition: StoredDocumentJobDefinitionDto) -> TextDocumentCollectionPort:
@@ -753,5 +712,5 @@ class LocalDocumentJobStages:
     @staticmethod
     def _integer(value: object) -> int:
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-            raise revision_error("FINAL_QUALITY_GATE_FAILED")
+            raise revision_error("FINAL_ARTIFACT_INVALID")
         return value

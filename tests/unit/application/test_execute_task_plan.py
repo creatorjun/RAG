@@ -123,7 +123,7 @@ class _Attempts:
 
 
 class ExecuteTaskPlanTest(unittest.TestCase):
-    def test_rewrites_only_failed_task_then_continues_in_plan_order(self) -> None:
+    def test_generates_each_task_once_and_continues_in_plan_order(self) -> None:
         evidence, ledger, plan = _fixture()
         attempts = _Attempts()
         progress = []
@@ -139,14 +139,14 @@ class ExecuteTaskPlanTest(unittest.TestCase):
             )
         )
         self.assertTrue(result.complete)
-        self.assertEqual(result.total_attempt_count, 3)
+        self.assertEqual(result.total_attempt_count, 2)
         self.assertEqual(
             attempts.calls,
-            [("task-01", 1), ("task-01", 2), ("task-02", 1)],
+            [("task-01", 1), ("task-02", 1)],
         )
         self.assertEqual(progress[-1], (2, 2, "task-02", True))
 
-    def test_stops_before_dependents_after_three_failed_attempts(self) -> None:
+    def test_legacy_invalid_reports_do_not_stop_dependent_tasks(self) -> None:
         evidence, ledger, plan = _fixture()
         attempts = _Attempts(always_invalid=True)
         result = asyncio.run(
@@ -157,10 +157,10 @@ class ExecuteTaskPlanTest(unittest.TestCase):
                 evidence,
             )
         )
-        self.assertFalse(result.complete)
-        self.assertEqual(result.total_attempt_count, 3)
-        self.assertEqual(attempts.calls, [("task-01", 1), ("task-01", 2), ("task-01", 3)])
-        self.assertEqual(len(result.outputs), 1)
+        self.assertTrue(result.complete)
+        self.assertEqual(result.total_attempt_count, 2)
+        self.assertEqual(attempts.calls, [("task-01", 1), ("task-02", 1)])
+        self.assertEqual(len(result.outputs), 2)
 
 
 if __name__ == "__main__":

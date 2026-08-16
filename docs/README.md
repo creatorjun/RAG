@@ -3,7 +3,7 @@
 
 ## 1. 문서 목적
 
-이 디렉터리는 루트의 [IMPLEMENTATION_PLAN.md](../IMPLEMENTATION_PLAN.md)를 구현 가능한 설계 계약으로 구체화한다. 기준 계획의 목표, 모델 선택, 품질 게이트, 보안 원칙은 변경하지 않는다. 문서 간 충돌이 발생하면 다음 우선순위를 적용한다.
+이 디렉터리는 루트의 [IMPLEMENTATION_PLAN.md](../IMPLEMENTATION_PLAN.md)를 구현 가능한 설계 계약으로 구체화한다. 런타임 품질 정책은 [ADR-0008](adr/0008-non-blocking-quality-observation.md)을 따르며 보안·무결성 원칙은 유지한다. 문서 간 충돌이 발생하면 다음 우선순위를 적용한다.
 
 1. `IMPLEMENTATION_PLAN.md`
 2. 승인된 ADR
@@ -99,8 +99,8 @@
 12. 모든 수정 결과는 기존 run이 아닌 신규 `data/after/runs/<run_id>`에만 기록한다.
 13. Confluence 자격정보는 설정, 프롬프트, 로그, 매니페스트, 워커 환경에 존재하지 않는다.
 14. Derived 산출물만으로 지지되는 사실은 게시할 수 없다.
-15. 품질 게이트 통과 전에는 `data/after/runs`에 게시 run을 만들지 않는다.
-16. 최종 문서는 검증된 Task 섹션을 결정적으로 조립하고 전체 자유 재작성하지 않는다.
+15. 품질 지표는 관찰하되 개별 Job의 `data/after/runs` 게시를 차단하지 않는다.
+16. 최종 문서는 생성된 Task 섹션을 결정적으로 조립하고 전체 자유 재작성하지 않는다.
 17. 단일 LLM 호출 한도는 최종 문서 길이 한도가 아니며 shard 병합 전 원본 Evidence를 손실 압축하지 않는다.
 
 ## 6. 문서 유지 규칙

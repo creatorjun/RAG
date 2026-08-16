@@ -66,7 +66,11 @@ class RunDocumentJob:
         if cancelled is not None:
             return cancelled
         if job.state is DocumentJobState.NEEDS_ATTENTION:
-            return DocumentJobDto.from_domain(job)
+            job = await self._jobs.transition(
+                job_id,
+                DocumentJobState.NEEDS_ATTENTION,
+                DocumentJobState.RUNNING_TASKS,
+            )
         last_event = None
         if job.last_event_sequence:
             events = await self._events.list_after(job_id, job.last_event_sequence - 1)
@@ -169,30 +173,6 @@ class RunDocumentJob:
                     "duration_ms": round((time.monotonic() - stage_started_at) * 1000),
                 },
             )
-            if result.needs_attention:
-                if stage.state not in {
-                    DocumentJobState.VALIDATING_TASKS,
-                    DocumentJobState.VALIDATING_FINAL,
-                }:
-                    await self._mark_failed(job_id, stage.state)
-                    raise revision_error("JOB_STATE_CONFLICT", {"job_id": job_id})
-                attention = await self._jobs.transition(
-                    job_id,
-                    stage.state,
-                    DocumentJobState.NEEDS_ATTENTION,
-                )
-                LOGGER.warning(
-                    "document_job_needs_attention",
-                    extra={
-                        "job_id": job_id,
-                        "stage": stage.state.value,
-                        "reason": result.message,
-                        "completed": result.completed,
-                        "total": result.total,
-                        "counter_name": result.counter_name,
-                    },
-                )
-                return DocumentJobDto.from_domain(attention)
         completed = await self._jobs.transition(
             job_id,
             DocumentJobState.PUBLISHING,

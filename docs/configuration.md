@@ -28,7 +28,8 @@
 
 환경 YAML은 배포·보안 상한이고 GUI가 저장하는 `var/config/desktop-settings.json`은 다음 Job의
 사용자 기본값이다. GUI 설정은 허용된 폴더, 모델, 추가 프롬프트와 실행 정책만 변경할 수 있으며
-web egress, Evidence 제한, 품질 게이트, 경로 보안 플래그를 덮어쓸 수 없다.
+web egress, Evidence 제한, 체크포인트 무결성, 경로 보안 플래그를 덮어쓸 수 없다. 본문 품질
+지표는 관찰용이며 실행 차단 플래그로 제공하지 않는다.
 
 ```text
 운영 YAML 상한

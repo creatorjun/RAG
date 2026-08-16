@@ -3,9 +3,10 @@
 
 ## 1. 범위
 
-이 문서는 [ADR-0006](adr/0006-evidence-ledger-orchestration.md)과
-[ADR-0007](adr/0007-context-bounded-lossless-generation.md)을 구현하는 Coordinator, Job,
-Evidence, Claim Ledger, Coverage Matrix, 장문 Task shard, 품질 게이트와 로컬 GUI 계약을 정의한다.
+이 문서는 [ADR-0006](adr/0006-evidence-ledger-orchestration.md),
+[ADR-0007](adr/0007-context-bounded-lossless-generation.md),
+[ADR-0008](adr/0008-non-blocking-quality-observation.md)을 구현하는 Coordinator, Job,
+Evidence, Claim Ledger, Coverage Matrix, 장문 Task shard, 비차단 품질 관찰과 로컬 GUI 계약을 정의한다.
 
 ## 2. 전체 흐름
 
@@ -19,11 +20,10 @@ flowchart TD
     REL --> COV["Coverage Matrix"]
     COV --> PLAN["고정 Task DAG"]
     PLAN --> WORK["MLX Task Worker"]
-    WORK --> VALID["태스크 품질 검증"]
-    VALID --> ASSEMBLE["결정적 Markdown 조립"]
-    ASSEMBLE --> GATE["전체 품질 게이트"]
-    GATE -->|통과| PUBLISH["data/after 원자 게시"]
-    GATE -->|실패| REVIEW["NEEDS_ATTENTION 또는 부분 재작성"]
+    WORK --> METRIC["태스크 결과·품질 지표 저장"]
+    METRIC --> ASSEMBLE["결정적 Markdown 조립"]
+    ASSEMBLE --> FINAL["전체 품질 지표 기록"]
+    FINAL --> PUBLISH["data/after 원자 게시"]
     PUBLISH --> NOTICE["완료 이벤트·시스템 알림"]
 ```
 
@@ -48,8 +48,8 @@ CREATED -> INSPECTING -> SNAPSHOTTING -> EXTRACTING_EVIDENCE
 ```
 
 분기 상태는 `NEEDS_ATTENTION`, `CANCELLING`, `CANCELLED`, `FAILED`다. 완료·실패·취소는
-terminal 상태이며 다른 실행 상태로 되돌릴 수 없다. `NEEDS_ATTENTION`은 명시적인 재개 요청이
-있을 때 실패 태스크 실행 또는 최종 조립 단계로만 전이한다.
+terminal 상태이며 다른 실행 상태로 되돌릴 수 없다. `NEEDS_ATTENTION`은 과거 체크포인트
+호환성을 위해 남아 있으며, 시작 요청 시 품질 규칙을 다시 적용하지 않고 `RUNNING_TASKS`로 재개한다.
 
 ## 5. Job 아티팩트
 
@@ -110,31 +110,26 @@ Claim은 최소 `claim_id`, `kind`, `statement`, `evidence_ids`, `preconditions`
 TaskPacket은 목적, 필수 Claim ID, 허용 Evidence ID, 중복 관계, 필수 섹션, 출력 스키마를
 포함한다. 모델은 다른 Task의 결과나 자유 검색 결과를 사실 근거로 사용할 수 없다.
 
-relation 연결 요소는 planning batch 경계를 가능한 한 함께 넘는다. Task가 8개보다 많은 owned
-Claim을 가지면 Worker가 선제 shard하며, 구조 출력이 불완전하면 Claim·section·context·Evidence
-순으로 더 나눈다. 각 호출은 compact ref를 사용하고 최종 TaskOutput은 코드가 병합한다.
+relation 연결 요소는 planning batch 경계를 가능한 한 함께 넘는다. Task가 8개 이상의 owned
+Claim을 가지면 Worker가 선제 shard한다. JSON을 읽을 수 없는 출력은 Claim·section·context·Evidence
+순으로 더 나누되, 읽을 수 있는 부분 결과의 섹션·coverage 누락은 실패로 처리하지 않는다.
+각 호출은 compact ref를 사용하고 최종 TaskOutput은 코드가 병합한다.
 
-## 8. 검증과 조립
+## 8. 무결성 검사와 조립
 
-태스크 검증은 완료 표식, 스키마, 필수 Claim, 출처, 명령·전제조건·경고·롤백 보존을 검사한다.
-결정적 검증 실패는 모델이 우회할 수 없다. 구조·완료 실패는 우선 더 작은 shard로 전환하고,
-병합 결과의 의미 검증 실패는 동일 Evidence를 고정한 채 Task attempt를 최대 2회 재작성한다.
+Worker는 JSON/schema를 해석하고 허용 참조 ID만 내부 ID로 복원한다. 이 경계는 손상된 결과를
+체크포인트로 오인하지 않기 위한 무결성 검사다. 완료 표식, 필수 섹션, 출처, 명령·전제조건·경고·
+롤백 보존 여부는 실행을 중단시키지 않는다.
 
-Assembler는 검증된 섹션, 제목, 목차, 출처, 원본 목록을 코드로 조립한다. 전체 문서를 모델에
-다시 전달하지 않는다.
+Assembler는 생성된 섹션을 계획 순서로 우선 배치하고, 확인 가능한 Evidence 표식만 출처로
+치환한 뒤 원본 목록을 추가한다. 부분 섹션과 인용 없는 본문도 보존하며 전체 문서를 모델에 다시
+전달하지 않는다.
 
-## 9. 품질 게이트
+## 9. 비차단 품질 관찰
 
-| 항목 | 기준 |
-| --- | ---: |
-| 필수 Coverage | 100% |
-| 출처와 Evidence 연결 | 100% |
-| 원본 구조 요소 배정 | 100% |
-| 잘린 출력·미완성 Markdown | 0건 |
-| 근거 없는 사실·숨겨진 충돌 | 0건 |
-| 필수 경고·롤백·원본 누락 | 0건 |
-
-게이트를 통과하기 전에는 FolderRevisionWorkspace를 준비하지 않는다.
+Task·Claim·Evidence 수와 생성 결과가 선언한 coverage를 최종 보고서에 기록한다. 값이 100%가
+아니어도 Job은 조립·게시를 계속한다. 품질 개선은 고정 평가 corpus의 버전별 추세, 프롬프트 변경,
+선제 shard와 shadow run으로 수행하며 개별 Job의 게시 조건으로 사용하지 않는다.
 
 ## 10. 진행 이벤트
 

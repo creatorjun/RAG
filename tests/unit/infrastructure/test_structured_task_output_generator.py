@@ -272,7 +272,7 @@ class StructuredTaskOutputGeneratorTest(unittest.TestCase):
             asyncio.run(generator.generate(packet, claims, evidence))
         self.assertEqual(captured.exception.code, "TASK_OUTPUT_INVALID")
 
-    def test_retry_prompt_explains_how_to_correct_validation_errors(self) -> None:
+    def test_legacy_validation_report_does_not_add_rule_corrections(self) -> None:
         packet, claims, evidence = _fixture()
         response = json.dumps(
             {
@@ -307,8 +307,8 @@ class StructuredTaskOutputGeneratorTest(unittest.TestCase):
             )
         )
 
-        self.assertIn('"previous_validation_corrections"', text_generator.user_prompt)
-        self.assertIn("정확히 같은 집합이어야 한다", text_generator.user_prompt)
+        self.assertNotIn('"previous_validation_errors"', text_generator.user_prompt)
+        self.assertNotIn('"previous_validation_corrections"', text_generator.user_prompt)
 
     def test_proactively_shards_large_tasks_and_merges_losslessly(self) -> None:
         packet, _, evidence = _fixture()
@@ -383,7 +383,7 @@ class StructuredTaskOutputGeneratorTest(unittest.TestCase):
             {claim.claim_id for claim in claims},
         )
 
-    def test_shards_structurally_lossy_response_before_saving_attempt(self) -> None:
+    def test_accepts_structurally_lossy_prose_without_rule_gate(self) -> None:
         packet, _, evidence = _fixture()
         evidence_id = evidence[0].evidence_id
         claims = tuple(
@@ -414,11 +414,49 @@ class StructuredTaskOutputGeneratorTest(unittest.TestCase):
             )
         )
 
-        self.assertEqual(len(text_generator.prompts), 3)
-        self.assertEqual(
-            set(output.sections[0].used_claim_ids),
-            {claim.claim_id for claim in claims},
+        self.assertEqual(len(text_generator.prompts), 1)
+        self.assertLess(
+            len(set(output.sections[0].used_claim_ids)),
+            len(claims),
         )
+
+    def test_accepts_partial_sections_and_missing_completion_marker(self) -> None:
+        packet, claims, evidence = _fixture()
+        packet = TaskPacketDto(
+            packet.task_id,
+            packet.title,
+            packet.objective,
+            packet.owned_claim_ids,
+            (),
+            packet.allowed_evidence_ids,
+            (),
+            ("개요", "절차"),
+            (),
+        )
+        response = json.dumps(
+            {
+                "task_id": packet.task_id,
+                "sections": [
+                    {
+                        "section_key": "개요",
+                        "heading": "개요",
+                        "markdown": "생성된 초안",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        )
+
+        output = asyncio.run(
+            StructuredTaskOutputGenerator(_TextGenerator(response), 1024).generate(
+                packet, claims, evidence
+            )
+        )
+
+        self.assertEqual(tuple(item.section_key for item in output.sections), ("개요",))
+        self.assertEqual(output.sections[0].used_claim_ids, ())
+        self.assertEqual(output.sections[0].used_evidence_ids, ())
+        self.assertEqual(output.conflict_claim_ids, ())
 
     def test_incomplete_output_is_recursively_sharded_instead_of_repeated(self) -> None:
         packet, _, evidence = _fixture()

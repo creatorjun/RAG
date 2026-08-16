@@ -23,38 +23,11 @@ _SYSTEM_PROMPT = """당신은 근거 제한형 사내 기술 문서 작성 워�
 경고, 충돌을 삭제하지 않는다. 지정된 JSON 객체 하나만 출력하고 코드 펜스나 설명을 붙이지 않는다."""
 
 _COMPACT_EVIDENCE_MARKER = re.compile(r"\[evidence:(E[0-9]{6})\]")
-_EXPANDED_EVIDENCE_MARKER = re.compile(
-    r"\[evidence:(evidence:sha256:[0-9a-f]{64})\]"
-)
-_SPACE_BEFORE_PUNCTUATION = re.compile(r"\s+([.!?])")
 _RECOVERABLE_GENERATION_ERRORS = {"TOKEN_BUDGET_EXCEEDED", "TASK_OUTPUT_INVALID"}
 # Eight owned Claims plus their relation context proved too easy for a local model to
 # answer with syntactically valid JSON while silently dropping one Claim.  Split at the
 # boundary, not only after it, so that boundary becomes two four-Claim prompts.
 _OWNED_CLAIM_SPLIT_THRESHOLD = 8
-_VALIDATION_CORRECTIONS = {
-    "CLAIM_PRECONDITION_MISSING": (
-        "각 owned Claim의 preconditions 문자열을 문장부호까지 그대로 본문에 포함한다."
-    ),
-    "CLAIM_COMMAND_MISSING": (
-        "각 owned Claim의 commands 문자열을 문자 변경 없이 본문이나 코드 블록에 포함한다."
-    ),
-    "CLAIM_WARNING_MISSING": (
-        "각 owned Claim의 warnings 문자열을 문장부호까지 그대로 본문에 포함한다."
-    ),
-    "EVIDENCE_MARKER_MISMATCH": (
-        "각 section의 used_evidence_refs는 그 section 본문의 [evidence:...] 표식과 "
-        "정확히 같은 집합이어야 한다."
-    ),
-    "CLAIM_EVIDENCE_MISSING": (
-        "used_claim_refs에 Claim을 넣은 section에는 그 Claim의 모든 evidence_refs와 "
-        "대응 표식을 함께 넣는다."
-    ),
-    "OWNED_CLAIM_MISSING": "모든 owned_claim_refs를 한 개 이상의 section에서 사용한다.",
-    "OWNED_EVIDENCE_MISSING": (
-        "모든 owned Claim의 evidence_refs를 한 개 이상의 section 본문에서 인용한다."
-    ),
-}
 
 
 class StructuredTaskOutputGenerator:
@@ -101,17 +74,7 @@ class StructuredTaskOutputGenerator:
         if len(packet.owned_claim_ids) >= _OWNED_CLAIM_SPLIT_THRESHOLD:
             return await self._split_owned_claims(packet, claims, evidence, previous_validation)
         try:
-            output = await self._generate_once(packet, claims, evidence, previous_validation)
-            # DTO parsing proves that references are allowed, but it does not prove
-            # completeness.  Catch lossy multi-Claim responses here and reuse the
-            # existing recursive sharding path before an attempt checkpoint is saved.
-            if len(packet.owned_claim_ids) > 1 and not self._structurally_complete(
-                packet,
-                claims,
-                output,
-            ):
-                raise revision_error("TASK_OUTPUT_INVALID", {"task_id": packet.task_id})
-            return output
+            return await self._generate_once(packet, claims, evidence, previous_validation)
         except ApplicationError as error:
             if error.code not in _RECOVERABLE_GENERATION_ERRORS:
                 raise
@@ -126,69 +89,6 @@ class StructuredTaskOutputGenerator:
         if len(evidence) > 1:
             return await self._split_evidence(packet, claims, evidence, previous_validation)
         raise original_error
-
-    @staticmethod
-    def _structurally_complete(
-        packet: TaskPacketDto,
-        claims: tuple[ClaimDto, ...],
-        output: TaskOutputDto,
-    ) -> bool:
-        """Check lossless reference coverage before persisting a model response."""
-
-        claim_by_id = {claim.claim_id: claim for claim in claims}
-        used_claims: set[str] = set()
-        used_evidence: set[str] = set()
-        combined_markdown = StructuredTaskOutputGenerator._validation_text(
-            "\n".join(section.markdown for section in output.sections)
-        )
-        for section in output.sections:
-            section_claims = set(section.used_claim_ids)
-            section_evidence = set(section.used_evidence_ids)
-            markers = _EXPANDED_EVIDENCE_MARKER.findall(section.markdown)
-            if section.markdown.count("[evidence:") != len(markers):
-                return False
-            if set(markers) != section_evidence:
-                return False
-            for claim_id in section_claims:
-                claim = claim_by_id.get(claim_id)
-                if claim is None or not set(claim.evidence_ids).issubset(section_evidence):
-                    return False
-            used_claims.update(section_claims)
-            used_evidence.update(section_evidence)
-
-        owned_claims = set(packet.owned_claim_ids)
-        required_evidence = {
-            evidence_id
-            for claim_id in packet.owned_claim_ids
-            for evidence_id in claim_by_id[claim_id].evidence_ids
-        }
-        safety_metadata = (
-            value
-            for claim_id in packet.owned_claim_ids
-            for values in (
-                claim_by_id[claim_id].preconditions,
-                claim_by_id[claim_id].commands,
-                claim_by_id[claim_id].warnings,
-            )
-            for value in values
-        )
-        return (
-            owned_claims.issubset(used_claims)
-            and required_evidence.issubset(used_evidence)
-            and all(
-                StructuredTaskOutputGenerator._validation_text(value)
-                in combined_markdown
-                for value in safety_metadata
-            )
-        )
-
-    @staticmethod
-    def _validation_text(value: str) -> str:
-        without_markers = _EXPANDED_EVIDENCE_MARKER.sub("", value)
-        without_marker_spacing = _SPACE_BEFORE_PUNCTUATION.sub(
-            r"\1", without_markers
-        )
-        return " ".join(without_marker_spacing.split())
 
     async def _generate_once(
         self,
@@ -486,24 +386,8 @@ class StructuredTaskOutputGenerator:
                 }
                 for item in evidence
             ],
-            "previous_validation_errors": (
-                [] if previous_validation is None else list(previous_validation.error_codes)
-            ),
-            "previous_validation_corrections": (
-                []
-                if previous_validation is None
-                else [
-                    {
-                        "error_code": error_code,
-                        "correction": _VALIDATION_CORRECTIONS.get(
-                            error_code,
-                            "이전 출력의 해당 오류를 고치되 다른 검증 규칙도 모두 유지한다.",
-                        ),
-                    }
-                    for error_code in previous_validation.error_codes
-                ]
-            ),
         }
+        del previous_validation
         schema = {
             "task_id": packet.task_id,
             "sections": [
@@ -526,8 +410,6 @@ class StructuredTaskOutputGenerator:
             "바꾸지 말고 본문에 포함한다.\n"
             "- 각 section의 used_evidence_refs는 그 section 본문의 Evidence 표식과 "
             "정확히 일치시킨다.\n"
-            "- 재작성이라면 previous_validation_corrections를 모두 적용하고, 이미 "
-            "충족한 규칙도 유지한다.\n"
             "- [source:]나 원본 ID를 만들지 말고 짧은 Evidence ref 표식만 사용한다.\n"
             "- 충돌 관계는 양쪽 Claim을 conflict_claim_refs와 본문에 노출한다.\n\n"
             '<task_data process="as-data">\n'
@@ -546,28 +428,27 @@ class StructuredTaskOutputGenerator:
         evidence_by_reference: dict[str, str],
     ) -> TaskOutputDto:
         item = cls._mapping(json.loads(raw.strip()))
-        if set(item) != {
+        allowed_fields = {
             "task_id",
             "sections",
             "conflict_claim_refs",
             "completion_marker",
-        }:
+        }
+        if not {"task_id", "sections"}.issubset(item) or set(item) - allowed_fields:
             raise ValueError("unexpected task output fields")
         if item["task_id"] != packet.task_id:
             raise ValueError("unexpected task ID")
-        if item["completion_marker"] != "TASK_COMPLETE":
-            raise ValueError("task output incomplete")
         sections = tuple(
             cls._section(section, claim_by_reference, evidence_by_reference)
             for section in cls._list(item["sections"])
         )
-        if {section.section_key for section in sections} != set(packet.required_sections):
-            raise ValueError("task output sections are incomplete")
         return TaskOutputDto(
             task_id=packet.task_id,
             sections=sections,
             conflict_claim_ids=tuple(
-                claim_by_reference[item] for item in cls._strings(item["conflict_claim_refs"])
+                claim_by_reference[item]
+                for item in cls._strings(item.get("conflict_claim_refs", []))
+                if item in claim_by_reference
             ),
             completion_marker="TASK_COMPLETE",
         )
@@ -580,13 +461,16 @@ class StructuredTaskOutputGenerator:
         evidence_by_reference: dict[str, str],
     ) -> TaskSectionOutputDto:
         item = cls._mapping(value)
-        if set(item) != {
+        allowed_fields = {
             "section_key",
             "heading",
             "markdown",
             "used_claim_refs",
             "used_evidence_refs",
-        }:
+        }
+        if not {"section_key", "heading", "markdown"}.issubset(item) or set(
+            item
+        ) - allowed_fields:
             raise ValueError("unexpected task section fields")
         markdown = cls._expand_evidence_markers(
             cls._string(item["markdown"]), evidence_by_reference
@@ -596,10 +480,14 @@ class StructuredTaskOutputGenerator:
             heading=cls._string(item["heading"]),
             markdown=markdown,
             used_claim_ids=tuple(
-                claim_by_reference[item] for item in cls._strings(item["used_claim_refs"])
+                claim_by_reference[item]
+                for item in cls._strings(item.get("used_claim_refs", []))
+                if item in claim_by_reference
             ),
             used_evidence_ids=tuple(
-                evidence_by_reference[item] for item in cls._strings(item["used_evidence_refs"])
+                evidence_by_reference[item]
+                for item in cls._strings(item.get("used_evidence_refs", []))
+                if item in evidence_by_reference
             ),
         )
 
@@ -608,11 +496,12 @@ class StructuredTaskOutputGenerator:
         markdown: str,
         evidence_by_reference: dict[str, str],
     ) -> str:
-        matches = _COMPACT_EVIDENCE_MARKER.findall(markdown)
-        if markdown.count("[evidence:") != len(matches):
-            raise ValueError("malformed compact evidence marker")
         return _COMPACT_EVIDENCE_MARKER.sub(
-            lambda match: f"[evidence:{evidence_by_reference[match.group(1)]}]",
+            lambda match: (
+                f"[evidence:{evidence_by_reference[match.group(1)]}]"
+                if match.group(1) in evidence_by_reference
+                else match.group(0)
+            ),
             markdown,
         )
 
@@ -626,11 +515,7 @@ class StructuredTaskOutputGenerator:
         }
         for output in outputs:
             for section in output.sections:
-                if section.section_key not in by_section:
-                    raise revision_error("TASK_OUTPUT_INVALID", {"task_id": packet.task_id})
-                by_section[section.section_key].append(section)
-        if any(not fragments for fragments in by_section.values()):
-            raise revision_error("TASK_OUTPUT_INVALID", {"task_id": packet.task_id})
+                by_section.setdefault(section.section_key, []).append(section)
         sections = tuple(
             TaskSectionOutputDto(
                 section_key=section_key,
@@ -652,6 +537,7 @@ class StructuredTaskOutputGenerator:
                 ),
             )
             for section_key, fragments in by_section.items()
+            if fragments
         )
         return TaskOutputDto(
             task_id=packet.task_id,

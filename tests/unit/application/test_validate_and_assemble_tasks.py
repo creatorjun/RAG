@@ -23,7 +23,6 @@ from enterprise_rag.application.use_cases.validate_final_document import (
 )
 from enterprise_rag.application.use_cases.validate_task_output import ValidateTaskOutput
 from enterprise_rag.domain.claims import ClaimKind
-from enterprise_rag.domain.errors import ApplicationError
 
 
 def _fixture() -> tuple[EvidenceBundleDto, ClaimLedgerDto, TaskPlanDto]:
@@ -179,7 +178,7 @@ class ValidateAndAssembleTaskTest(unittest.TestCase):
         self.assertEqual(quality.evidence_count, 1)
         self.assertEqual(quality.source_document_count, 2)
 
-    def test_reports_missing_marker_claim_and_completion_without_throwing(self) -> None:
+    def test_task_quality_rules_are_non_blocking(self) -> None:
         _, ledger, plan = _fixture()
         packet = plan.tasks[0]
         invalid = TaskOutputDto(
@@ -197,13 +196,10 @@ class ValidateAndAssembleTaskTest(unittest.TestCase):
             completion_marker="",
         )
         report = ValidateTaskOutput().execute(packet, ledger, invalid)
-        self.assertFalse(report.valid)
-        self.assertIn("OUTPUT_INCOMPLETE", report.error_codes)
-        self.assertIn("REQUIRED_SECTION_MISSING", report.error_codes)
-        self.assertIn("UNPLANNED_SECTION", report.error_codes)
-        self.assertIn("EVIDENCE_MARKER_MISMATCH", report.error_codes)
+        self.assertTrue(report.valid)
+        self.assertEqual(report.error_codes, ())
 
-    def test_assembler_rejects_unvalidated_output(self) -> None:
+    def test_assembler_accepts_output_without_quality_approval(self) -> None:
         evidence, ledger, plan = _fixture()
         output = _valid_output(plan)
         invalid = TaskOutputDto(
@@ -213,13 +209,39 @@ class ValidateAndAssembleTaskTest(unittest.TestCase):
             "TRUNCATED",
         )
         report = ValidateTaskOutput().execute(plan.tasks[0], ledger, invalid)
-        with self.assertRaises(ApplicationError) as captured:
-            AssembleDocument().execute(
-                "통합 가이드", plan, evidence, (invalid,), (report,)
-            )
-        self.assertEqual(captured.exception.code, "DOCUMENT_ASSEMBLY_FAILED")
+        markdown = AssembleDocument().execute(
+            "통합 가이드", plan, evidence, (invalid,), (report,)
+        )
+        self.assertIn("[source:guide.md]", markdown)
 
-    def test_final_quality_gate_reports_tampering_and_incomplete_coverage(self) -> None:
+    def test_assembler_keeps_partial_uncited_output(self) -> None:
+        evidence, ledger, plan = _fixture()
+        packet = plan.tasks[0]
+        output = TaskOutputDto(
+            packet.task_id,
+            (
+                TaskSectionOutputDto(
+                    "모델이 만든 섹션",
+                    "초안",
+                    "아직 출처 표기가 없는 생성 결과입니다.",
+                    (),
+                    (),
+                ),
+            ),
+            (),
+            "TRUNCATED",
+        )
+        report = ValidateTaskOutput().execute(packet, ledger, output)
+
+        markdown = AssembleDocument().execute(
+            "통합 가이드", plan, evidence, (output,), (report,)
+        )
+
+        self.assertIn("### 초안", markdown)
+        self.assertIn("아직 출처 표기가 없는 생성 결과입니다.", markdown)
+        self.assertIn("## 원본 문서 목록", markdown)
+
+    def test_final_quality_measurements_do_not_block_incomplete_coverage(self) -> None:
         evidence, ledger, plan = _fixture()
         output = _valid_output(plan)
         report = ValidateTaskOutput().execute(plan.tasks[0], ledger, output)
@@ -235,14 +257,13 @@ class ValidateAndAssembleTaskTest(unittest.TestCase):
             (),
             (report,),
         )
-        self.assertFalse(quality.valid)
-        self.assertIn("TASK_OUTPUT_COVERAGE_INCOMPLETE", quality.error_codes)
-        self.assertIn("CLAIM_COVERAGE_INCOMPLETE", quality.error_codes)
-        self.assertIn("EVIDENCE_COVERAGE_INCOMPLETE", quality.error_codes)
-        self.assertIn("SOURCE_NOT_ALLOWED", quality.error_codes)
-        self.assertIn("SOURCE_COVERAGE_INCOMPLETE", quality.error_codes)
+        self.assertTrue(quality.valid)
+        self.assertEqual(quality.error_codes, ())
+        self.assertEqual(quality.validated_task_count, 0)
+        self.assertEqual(quality.covered_claim_count, 0)
+        self.assertEqual(quality.covered_evidence_count, 0)
 
-    def test_validator_requires_owned_claim_operational_details_verbatim(self) -> None:
+    def test_operational_wording_is_not_a_hard_requirement(self) -> None:
         _, ledger, plan = _fixture()
         packet = plan.tasks[0]
         evidence_id = packet.allowed_evidence_ids[0]
@@ -261,10 +282,8 @@ class ValidateAndAssembleTaskTest(unittest.TestCase):
             "TASK_COMPLETE",
         )
         report = ValidateTaskOutput().execute(packet, ledger, output)
-        self.assertFalse(report.valid)
-        self.assertIn("CLAIM_PRECONDITION_MISSING", report.error_codes)
-        self.assertIn("CLAIM_COMMAND_MISSING", report.error_codes)
-        self.assertIn("CLAIM_WARNING_MISSING", report.error_codes)
+        self.assertTrue(report.valid)
+        self.assertEqual(report.error_codes, ())
 
     def test_validator_ignores_citation_before_operational_detail_punctuation(self) -> None:
         _, ledger, plan = _fixture()
@@ -348,7 +367,7 @@ class ValidateAndAssembleTaskTest(unittest.TestCase):
         )
         self.assertLess(markdown.index("### 첫 번째"), markdown.index("### 두 번째"))
 
-    def test_validator_reports_unauthorized_and_malformed_model_references(self) -> None:
+    def test_task_observer_does_not_apply_reference_quality_rules(self) -> None:
         _, ledger, plan = _fixture()
         packet = plan.tasks[0]
         foreign_evidence = "evidence:sha256:" + "f" * 64
@@ -367,22 +386,11 @@ class ValidateAndAssembleTaskTest(unittest.TestCase):
             "TASK_COMPLETE",
         )
         report = ValidateTaskOutput().execute(packet, ledger, invalid)
-        expected = {
-            "TASK_ID_MISMATCH",
-            "CLAIM_NOT_ALLOWED",
-            "EVIDENCE_NOT_ALLOWED",
-            "EVIDENCE_MARKER_MALFORMED",
-            "SOURCE_MARKER_NOT_ALLOWED",
-            "MARKDOWN_INCOMPLETE",
-            "EVIDENCE_MARKER_MISMATCH",
-            "CLAIM_NOT_FOUND",
-            "OWNED_CLAIM_MISSING",
-            "OWNED_EVIDENCE_MISSING",
-            "CONFLICT_CLAIM_NOT_ALLOWED",
-        }
-        self.assertTrue(expected.issubset(set(report.error_codes)))
+        self.assertTrue(report.valid)
+        self.assertEqual(report.task_id, packet.task_id)
+        self.assertEqual(report.error_codes, ())
 
-    def test_final_gate_rejects_incomplete_structure_and_internal_markers(self) -> None:
+    def test_final_measurement_accepts_incomplete_structure(self) -> None:
         evidence, ledger, plan = _fixture()
         output = _valid_output(plan)
         report = ValidateTaskOutput().execute(plan.tasks[0], ledger, output)
@@ -394,16 +402,10 @@ class ValidateAndAssembleTaskTest(unittest.TestCase):
             (output,),
             (report,),
         )
-        self.assertFalse(quality.valid)
-        for code in (
-            "SOURCE_MARKER_MALFORMED",
-            "SOURCE_COVERAGE_INCOMPLETE",
-            "EVIDENCE_MARKER_REMAINS",
-            "MARKDOWN_INCOMPLETE",
-            "DOCUMENT_STRUCTURE_INCOMPLETE",
-            "TASK_SECTION_MISSING",
-        ):
-            self.assertIn(code, quality.error_codes)
+        self.assertTrue(quality.valid)
+        self.assertEqual(quality.error_codes, ())
+        self.assertEqual(quality.covered_claim_count, 1)
+        self.assertEqual(quality.covered_evidence_count, 1)
 
 
 if __name__ == "__main__":

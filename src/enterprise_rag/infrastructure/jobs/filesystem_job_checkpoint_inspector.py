@@ -257,49 +257,22 @@ class FilesystemJobCheckpointInspector:
             ordinals = [attempt for attempt, _ in attempts]
             if ordinals != list(range(1, len(ordinals) + 1)):
                 return self._invalid("task_attempts", "Task attempts", "tasks/")
-            if any(report.valid for _, report in attempts[:-1]):
-                return self._invalid("task_attempts", "Task attempts", "tasks/")
         attempt_count = sum(len(attempts) for attempts in reports_by_task.values())
         latest_reports = {
             task_id: attempts[-1][1]
             for task_id, attempts in reports_by_task.items()
             if attempts
         }
-        valid_count = sum(report.valid for report in latest_reports.values())
-        failed = sorted(
-            (report for report in latest_reports.values() if not report.valid),
-            key=lambda report: report.task_id,
-        )
+        generated_count = len(latest_reports)
         if incomplete:
             return JobCheckpointDto(
                 "task_attempts",
                 "Task attempts",
                 "tasks/",
                 CheckpointStatus.IN_PROGRESS,
-                valid_count,
-                valid_count > 0,
-                f"Task {valid_count}/{len(plan.tasks)} 통과 · 미완료 attempt 있음",
-            )
-        if failed:
-            report = failed[0]
-            attempts = reports_by_task[report.task_id]
-            exhausted = len(attempts) >= 3
-            errors = ", ".join(report.error_codes)
-            return JobCheckpointDto(
-                "task_attempts",
-                "Task attempts",
-                "tasks/",
-                (
-                    CheckpointStatus.INVALID
-                    if exhausted
-                    else CheckpointStatus.IN_PROGRESS
-                ),
-                valid_count,
-                not exhausted,
-                (
-                    f"Task {valid_count}/{len(plan.tasks)} 통과 · "
-                    f"{report.task_id} attempt {len(attempts)}/3 실패 · {errors}"
-                ),
+                generated_count,
+                generated_count > 0,
+                f"Task 출력 {generated_count}/{len(plan.tasks)}건 · 미완료 저장 있음",
             )
         if len(latest_reports) < len(plan.tasks):
             return JobCheckpointDto(
@@ -307,10 +280,10 @@ class FilesystemJobCheckpointInspector:
                 "Task attempts",
                 "tasks/",
                 CheckpointStatus.IN_PROGRESS,
-                valid_count,
+                generated_count,
                 True,
                 (
-                    f"Task {valid_count}/{len(plan.tasks)} 통과 · "
+                    f"Task 출력 {generated_count}/{len(plan.tasks)}건 · "
                     f"attempt {attempt_count}건 저장"
                 ),
             )
@@ -318,8 +291,8 @@ class FilesystemJobCheckpointInspector:
             "task_attempts",
             "Task attempts",
             "tasks/",
-            valid_count,
-            f"Task {valid_count}/{len(plan.tasks)} 통과 · attempt {attempt_count}건 저장",
+            generated_count,
+            f"Task 출력 {generated_count}/{len(plan.tasks)}건 · attempt {attempt_count}건 저장",
         )
 
     async def _draft_checkpoint(self, job_id: str) -> JobCheckpointDto:
@@ -341,22 +314,24 @@ class FilesystemJobCheckpointInspector:
             # a present but corrupt report or a report whose draft digest does not match.
             await self._artifacts.read_json(job_id, path)
             candidate = await self._finals.load(job_id)
-            status = CheckpointStatus.SAVED if candidate.quality.valid else CheckpointStatus.INVALID
             return JobCheckpointDto(
                 "final_quality",
-                "최종 품질 게이트",
+                "최종 품질 지표",
                 path,
-                status,
+                CheckpointStatus.SAVED,
                 candidate.quality.validated_task_count,
-                candidate.quality.valid,
+                True,
                 (
-                    "통과"
-                    if candidate.quality.valid
-                    else ", ".join(candidate.quality.error_codes)
+                    f"Task {candidate.quality.validated_task_count}/"
+                    f"{candidate.quality.task_count} · "
+                    f"Claim {candidate.quality.covered_claim_count}/"
+                    f"{candidate.quality.claim_count} · "
+                    f"Evidence {candidate.quality.covered_evidence_count}/"
+                    f"{candidate.quality.evidence_count}"
                 ),
             )
         except ApplicationError as error:
-            return self._from_error("final_quality", "최종 품질 게이트", path, error)
+            return self._from_error("final_quality", "최종 품질 지표", path, error)
 
     async def _published_checkpoint(self, job_id: str) -> JobCheckpointDto:
         path = "control/publish-result.json"

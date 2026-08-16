@@ -44,7 +44,7 @@ class StartDocumentJobTest(unittest.TestCase):
         self.assertEqual(result.process_id, 321)
         self.assertEqual(launcher.calls, [job.job_id])
 
-    def test_rejects_missing_terminal_and_attention_jobs(self) -> None:
+    def test_rejects_missing_and_terminal_jobs(self) -> None:
         launcher = _Launcher()
         jobs = (
             None,
@@ -53,13 +53,22 @@ class StartDocumentJobTest(unittest.TestCase):
                 DocumentJobState.COMPLETED,
                 last_percentage=100,
             ),
-            DocumentJob("job-" + "c" * 32, DocumentJobState.NEEDS_ATTENTION),
         )
         for job in jobs:
             job_id = "job-" + "d" * 32 if job is None else job.job_id
             with self.subTest(job=job), self.assertRaises(ApplicationError):
                 asyncio.run(StartDocumentJob(_Jobs(job), launcher).execute(job_id))
         self.assertEqual(launcher.calls, [])
+
+    def test_resumes_legacy_attention_job_without_quality_gate(self) -> None:
+        launcher = _Launcher()
+        job = DocumentJob("job-" + "c" * 32, DocumentJobState.NEEDS_ATTENTION)
+        jobs = _Jobs(job)
+
+        result = asyncio.run(StartDocumentJob(jobs, launcher).execute(job.job_id))
+
+        self.assertEqual(result.job.state, DocumentJobState.RUNNING_TASKS)
+        self.assertEqual(launcher.calls, [job.job_id])
 
     def test_requeues_failed_job_before_launching_from_saved_checkpoints(self) -> None:
         launcher = _Launcher()

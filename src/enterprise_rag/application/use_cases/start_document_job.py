@@ -29,10 +29,13 @@ class StartDocumentJob:
                 DocumentJobState.FAILED,
                 DocumentJobState.CREATED,
             )
-        if job.state.terminal or job.state in {
-            DocumentJobState.CANCELLING,
-            DocumentJobState.NEEDS_ATTENTION,
-        }:
+        if job.state is DocumentJobState.NEEDS_ATTENTION:
+            job = await self._jobs.transition(
+                job_id,
+                DocumentJobState.NEEDS_ATTENTION,
+                DocumentJobState.RUNNING_TASKS,
+            )
+        if job.state.terminal or job.state is DocumentJobState.CANCELLING:
             raise revision_error("JOB_NOT_RUNNABLE", {"job_id": job_id})
         process_id = await self._launcher.launch(job_id)
         return DocumentJobLaunchDto(DocumentJobDto.from_domain(job), process_id)

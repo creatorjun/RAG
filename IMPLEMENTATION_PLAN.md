@@ -254,7 +254,7 @@ RAG/
 - `data/before`는 읽기 전용이며 AI, Qwen 워커, 비교 도구가 수정·삭제·이동하지 않는다.
 - 수정 작업은 고유한 `data/after/runs/<run_id>/documents`에만 수행하고 기존 run을 덮어쓰지 않는다.
 - Worker 사전 점검은 `after_root` 디렉터리를 생성해 링크·중첩·쓰기 실패를 즉시 검출한다.
-- 품질 게이트 전 중간 산출물은 `var/jobs/<job_id>`에 기록하고 after의 `runs/<run_id>`는 게이트 통과 후 생성한다.
+- 중간 산출물과 비차단 품질 지표는 `var/jobs/<job_id>`에 기록하고, 조립 결과와 저장 무결성을 확인한 뒤 after의 `runs/<run_id>`를 생성한다.
 - 준비 단계는 입력 파일의 상대 경로, 바이트 수, SHA-256을 매니페스트로 고정한다.
 - 비교 단계는 추가·수정·삭제·동일 상태, 전후 해시, UTF-8 텍스트 unified diff를 생성한다.
 - finalization 후 run은 불변으로 취급하며 후속 수정은 새 run으로 만든다.
@@ -282,8 +282,8 @@ flowchart LR
     M --> N
     N --> O["사람 승인"]
     O --> P["Claim Ledger·Coverage·Task DAG"]
-    P --> S["Task 검증·결정적 문서 조립"]
-    S --> Q["품질 게이트 후 data/after 신규 run"]
+    P --> S["Task 생성·결정적 문서 조립"]
+    S --> Q["품질 지표 기록 후 data/after 신규 run"]
     Q --> R["사람 검토·별도 게시"]
 ```
 
@@ -761,13 +761,13 @@ publishing:
 ### Milestone 5: 합성·게시
 
 - Evidence Store, Claim Ledger와 중복·충돌 관계
-- Coverage Matrix, TaskPacket과 태스크별 검증
-- 검증된 섹션의 결정적 조립과 전체 품질 게이트
+- Coverage Matrix, TaskPacket과 태스크별 비차단 품질 관찰
+- 생성된 섹션의 결정적 조립과 전체 품질 지표
 - 주제별 Markdown, 인덱스, 충돌, 제안 업데이트 문서
 - before/after 비교 리포트, 인용 검증, 게시 승인
 - 선택적 단일 Markdown 내보내기
 
-종료 조건은 모든 게시 사실 문장의 근거 커버리지 100%, 인용 정확도 게이트 통과, 동일 입력의 결정적 재생성이다.
+종료 조건은 고정 평가 corpus에서 근거 커버리지와 인용 정확도가 기준선보다 개선되고, 동일 입력의 결정적 재생성이 확인되는 것이다. 개별 Job은 이 평가 점수 때문에 중단하지 않는다.
 
 ### Milestone 6: 운영 준비
 

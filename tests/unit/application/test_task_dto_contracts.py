@@ -113,8 +113,6 @@ class TaskDtoContractsTest(unittest.TestCase):
     def test_rejects_invalid_task_outputs_and_execution_summaries(self) -> None:
         for changes in (
             {"section_key": ""},
-            {"used_claim_ids": ()},
-            {"used_evidence_ids": ()},
             {"used_claim_ids": (CLAIM, CLAIM)},
         ):
             with self.subTest(changes=changes), self.assertRaises(ValueError):
@@ -142,8 +140,10 @@ class TaskDtoContractsTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             TaskPlanExecutionDto((valid_output,), (valid_report,), 0, True)
         invalid_report = TaskValidationReportDto("task-one", False, ("ERROR",))
-        with self.assertRaises(ValueError):
-            TaskPlanExecutionDto((valid_output,), (invalid_report,), 1, True)
+        legacy_execution = TaskPlanExecutionDto(
+            (valid_output,), (invalid_report,), 1, True
+        )
+        self.assertTrue(legacy_execution.complete)
 
     def test_rejects_inconsistent_final_quality_and_candidate(self) -> None:
         digest = hashlib.sha256(b"# document\n").hexdigest()

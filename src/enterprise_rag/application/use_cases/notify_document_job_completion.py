@@ -61,7 +61,7 @@ class NotifyDocumentJobCompletion:
         try:
             await self._notifier.send(
                 "Local Document RAG 작업 완료",
-                f"{job_id} 문서 게시와 품질 검증이 완료되었습니다.",
+                f"{job_id} 문서 게시가 완료되고 품질 지표가 기록되었습니다.",
             )
         except ApplicationError as error:
             return await self._receipts.finish(

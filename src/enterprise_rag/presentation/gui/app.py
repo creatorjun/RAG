@@ -41,7 +41,7 @@ _FIXED_POLICY_PREVIEW = """고정 정책(편집 불가)
 • 허용된 Evidence 밖의 사실 생성 금지
 • 출처, 명령, 전제조건, 경고와 충돌 보존
 • 파일·셸·도구 실행 및 임의 네트워크 접근 금지
-• 최종 품질 게이트 우회 금지"""
+• 품질 지표는 관찰하되 문서 생성을 차단하지 않음"""
 
 _ERROR_GUIDANCE = {
     "INVALID_INPUT": (
@@ -94,6 +94,10 @@ _ERROR_GUIDANCE = {
     "MODEL_OUTPUT_INCOMPLETE": (
         "출력 토큰 한도를 확인한 뒤 실패 지점부터 복구하세요."
     ),
+    "FINAL_ARTIFACT_INVALID": (
+        "최종 문서 체크포인트가 없거나 저장 digest와 다릅니다. 상태를 새로고침한 뒤 "
+        "실패 지점부터 복구하세요."
+    ),
     "TOKEN_BUDGET_EXCEEDED": (
         "단계별 입력 분할 한도를 초과했습니다. 업데이트된 파이프라인으로 실패 지점부터 "
         "복구하세요. 반복되면 설정 탭에서 context를 늘리거나 추가 시스템 지침을 줄이세요."
@@ -102,7 +106,8 @@ _ERROR_GUIDANCE = {
         "저장된 Evidence와 Claim은 유지됩니다. 실패 지점부터 복구해 계획을 다시 생성하세요."
     ),
     "TASK_OUTPUT_INVALID": (
-        "해당 Task 출력이 자동 교정 한도를 넘었습니다. 실패 지점부터 복구하세요."
+        "해당 Task의 JSON을 읽거나 안전한 체크포인트로 저장할 수 없습니다. 출력 한도를 "
+        "확인한 뒤 실패 지점부터 복구하세요."
     ),
     "IO_FAILURE": (
         "작업 폴더의 쓰기 권한과 디스크 여유 공간을 확인한 뒤 다시 시도하세요."
@@ -911,7 +916,7 @@ class _DesktopWindow:
         layout.addWidget(
             self._page_intro(
                 "문서 파이프라인",
-                "작업을 만들고 실행한 뒤 체크포인트와 품질 검증 상태를 한곳에서 확인합니다.",
+                "작업을 만들고 실행한 뒤 체크포인트와 품질 지표를 한곳에서 확인합니다.",
             )
         )
 
@@ -1060,7 +1065,7 @@ class _DesktopWindow:
         metrics.setColumnStretch(1, 1)
         result_layout.addLayout(metrics)
 
-        result_layout.addWidget(self._label("검증된 산출물", "fieldLabel"))
+        result_layout.addWidget(self._label("생성 산출물", "fieldLabel"))
         files = self._widgets.QGridLayout()
         files.setContentsMargins(0, 0, 0, 0)
         files.setHorizontalSpacing(12)
@@ -1733,22 +1738,21 @@ class _DesktopWindow:
         notification: CompletionNotificationDto,
     ) -> None:
         status_text = {
-            JobResultAvailability.NOT_READY: "아직 최종 품질·게시 결과가 없습니다.",
-            JobResultAvailability.QUALITY_READY: "최종 품질 보고서가 생성됐고 게시를 기다립니다.",
+            JobResultAvailability.NOT_READY: "아직 최종 문서·게시 결과가 없습니다.",
+            JobResultAvailability.QUALITY_READY: "최종 문서 지표가 생성됐고 게시를 기다립니다.",
             JobResultAvailability.PUBLISHED: "게시 문서와 비교 보고서 무결성 검증을 통과했습니다.",
         }[result.availability]
         self._result_status.setText(f"{result.availability.value} · {status_text}")
         quality = result.quality
         if quality is None:
-            self._quality_summary.setText("품질 보고서 대기 중")
+            self._quality_summary.setText("품질 지표 대기 중")
         else:
-            errors = "없음" if not quality.error_codes else ", ".join(quality.error_codes)
             self._quality_summary.setText(
-                f"{'통과' if quality.valid else '실패'} · "
+                "관찰 지표 · "
                 f"Task {quality.validated_task_count}/{quality.task_count} · "
                 f"Claim {quality.covered_claim_count}/{quality.claim_count} · "
                 f"Evidence {quality.covered_evidence_count}/{quality.evidence_count} · "
-                f"원본 {quality.source_document_count}개 · 오류 {errors}"
+                f"원본 {quality.source_document_count}개"
             )
         counts = result.comparison_counts
         if counts is None:
@@ -1842,6 +1846,8 @@ class _DesktopWindow:
             self._start_button.setText("파이프라인 실행 중")
         elif job.state is DocumentJobState.FAILED:
             self._start_button.setText("실패 지점부터 복구")
+        elif job.state is DocumentJobState.NEEDS_ATTENTION:
+            self._start_button.setText("문서 생성 계속")
         else:
             self._start_button.setText(
                 "파이프라인 재개" if job.last_percentage else "파이프라인 시작"
@@ -1852,11 +1858,7 @@ class _DesktopWindow:
                 job.state is DocumentJobState.FAILED
                 or (
                     not job.state.terminal
-                    and job.state
-                    not in {
-                        DocumentJobState.CANCELLING,
-                        DocumentJobState.NEEDS_ATTENTION,
-                    }
+                    and job.state is not DocumentJobState.CANCELLING
                 )
             )
         )

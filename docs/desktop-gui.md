@@ -59,7 +59,8 @@ GUI와 별도 프로세스이며 GUI 종료가 Job 취소를 뜻하지 않는다
 
 원본 폴더는 사용자 선택값이지만 Job 시작 시 불변 입력 manifest를 만들고 이후 변경을 감지한다.
 Worker 사전 점검은 쓰기 권한과 경로 경계를 조기에 검증하기 위해 결과 루트 자체는 생성한다.
-최종 결과 파일과 `runs/<job_id>`는 품질 게이트 통과 전까지 만들지 않는다.
+최종 결과 파일과 `runs/<job_id>`는 조립 결과와 체크포인트 digest를 확인한 뒤 만든다. 품질
+coverage 값은 게시를 차단하지 않는다.
 
 ### 3.2 Hugging Face 로컬 모델
 
@@ -144,9 +145,9 @@ Job 생성은 백그라운드에서 모델 선택을 다시 검증하고, cache 
 | Claim 추출 | 진행/완료 | 처리 Evidence 수/전체 | 부분 | Evidence별 재개 지점 |
 | Claim Ledger | 저장됨/없음 | Claim 수 | 예 | 관계·충돌 수 |
 | Task plan | 저장됨/없음 | Task 수 | 예 | DAG·coverage |
-| Task attempts | 진행/완료 | 검증 수/전체 | 부분 | 실패 코드 |
+| Task attempts | 진행/완료 | 생성 수/전체 | 부분 | 관찰 지표 |
 | 조립 초안 | 저장됨/없음 | 1 | 예 | 문서 SHA-256 |
-| 최종 게이트 | 통과/실패/대기 | 검사 수 | 조건부 | 품질 오류 코드 |
+| 최종 품질 지표 | 기록/대기 | Task·Claim·Evidence 수 | 예 | coverage 추세 |
 | 게시 run | 게시됨/없음 | 파일 수 | 아니요 | 비교 보고서 |
 
 파일 존재만으로 저장 완료를 판정하지 않는다. JSON schema, Job ID, 입력 hash와 문서 digest를
@@ -154,7 +155,7 @@ Job 생성은 백그라운드에서 모델 선택을 다시 검증하고, cache 
 
 Claim 추출에서 기술적으로 관련된 내용이 없는 Evidence는 원본·Evidence 감사 기록에는 보존하되
 Claim, Task와 최종 문서 coverage에서는 제외한다. 기술 Claim이 있는 Evidence만 Claim Ledger의
-검토 완료 집합에 들어가며, 최종 품질 게이트는 이 집합의 100% coverage를 요구한다.
+검토 완료 집합에 들어가며, 이 집합의 coverage는 비차단 품질 지표로 기록한다.
 각 Evidence의 유효한 Claim 배열은 빈 배열을 포함해 `claim-drafts/<evidence-digest>.json`에 즉시
 write-once 저장한다. 다음 실행은 저장된 항목을 검증해 건너뛰므로 마지막 응답의 JSON 오류가 앞선
 전체 추출 결과를 폐기하지 않는다.
@@ -166,8 +167,8 @@ context에서도 입력 공간을 확보하도록 Claim 추출 2,048, Claim 관�
 
 전체 Claim 요청이 그래도 context를 넘으면 최대 40개 Claim 단위로 자동 분할한다. 관계 판정은
 원본 문서, 전체 문장 순서와 Claim 종류별 겹침 batch를 조합하고 중복되거나 서로 다른 판정이
-나온 관계를 코드로 검증한다. Task 계획은 Claim을 중복 없이 나누고 batch별 Task ID namespace를
-부여한 뒤 기존 단일 소유·Evidence coverage·DAG 품질 게이트를 그대로 적용한다.
+나온 관계를 코드로 정규화한다. Task 계획은 Claim을 중복 없이 나누고 batch별 Task ID namespace를
+부여한다. 참조·DAG 무결성은 유지하지만 생성 본문의 coverage는 품질 게이트로 쓰지 않는다.
 
 Worker 오류로 `FAILED`가 된 Job은 명시적인 `실패 지점부터 복구` 동작으로 `CREATED`에 재등록한
 뒤 저장된 체크포인트를 순서대로 재검증한다. 기존 진행 이벤트와 진행률은 유지하고, 유효한
@@ -183,11 +184,11 @@ manifest·Evidence·Claim·Task 결과는 다시 생성하지 않는다.
 
 `LLM 실시간 스트림`은 Worker의 `stream_generate` 조각을 짧게 버퍼링해 Job별
 `runtime/model-stream.jsonl`에 append하고 Dashboard polling으로 읽는다. 화면은 생성 ID, 단계,
-시작·종료·실패와 생성 문자열을 시간 순서로 표시한다. 이 문자열은 JSON schema, Claim/Evidence,
-품질 게이트를 통과하기 전의 진단 출력이며 최종 문서로 취급하지 않는다. 화면 조회 한도는 최근
+시작·종료·실패와 생성 문자열을 시간 순서로 표시한다. 이 문자열은 저장 전 모델의 임시 출력이며
+체크포인트에 기록된 최종 문서와 구분한다. 화면 조회 한도는 최근
 1,000 event이고 생략 여부를 명시한다. 스트림 저장 실패는 모델 결과와 Job 제어를 실패시키지 않는다.
 
-현재 결과 패널은 게시 상태, Task·Claim·Evidence coverage, 원본 수, 품질 오류 코드와
+현재 결과 패널은 게시 상태, Task·Claim·Evidence coverage, 원본 수, 관찰 지표와
 추가·수정·삭제·동일 건수를 표시한다. 최종 문서, 품질 JSON, 비교 Markdown, 합성 JSON의 `열기`
 버튼은 Application adapter가 경계와 SHA-256을 재검증한 경로에만 활성화된다.
 
@@ -247,7 +248,7 @@ Job 기본값이며 배포·보안 설정 YAML을 대체하지 않는다. Job �
 
 현재는 1~6의 실행 수직 경로를 기존 코드에 통합했다. `새 작업 생성` 후
 `파이프라인 시작/재개`를 누르면 Job별 로컬 프로세스가 manifest, Evidence, Claim,
-Task attempt, 최종 품질 게이트와 게시 run을 체크포인트하며 수행한다. 단계 완료
+Task 결과, 최종 품질 지표와 게시 run을 체크포인트하며 수행한다. 단계 완료
 event와 attempt를 사용해 중단 지점에서 멱등 재개한다. Claim 추출은 Evidence별 partial
 checkpoint를 저장하고 실행 화면의 30~39% 건수 진행률과 LLM 생성 문자열을 실시간으로 갱신한다.
 

@@ -51,7 +51,7 @@ from enterprise_rag.infrastructure.jobs.filesystem_task_result_repository import
 
 
 class FilesystemJobCheckpointInspectorTest(unittest.TestCase):
-    def test_reports_exhausted_task_and_latest_validation_errors(self) -> None:
+    def test_treats_legacy_validation_failures_as_saved_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
             artifacts = FilesystemJobArtifactRepository(root / "var")
@@ -125,11 +125,11 @@ class FilesystemJobCheckpointInspectorTest(unittest.TestCase):
 
             checkpoint = asyncio.run(inspector._task_attempts_checkpoint(job.job_id))
 
-            self.assertEqual(checkpoint.status, CheckpointStatus.INVALID)
-            self.assertEqual(checkpoint.item_count, 0)
-            self.assertFalse(checkpoint.resumable)
-            self.assertIn("failing-task attempt 3/3 실패", checkpoint.detail)
-            self.assertIn("OWNED_CLAIM_MISSING", checkpoint.detail)
+            self.assertEqual(checkpoint.status, CheckpointStatus.SAVED)
+            self.assertEqual(checkpoint.item_count, 1)
+            self.assertTrue(checkpoint.resumable)
+            self.assertIn("Task 출력 1/1건", checkpoint.detail)
+            self.assertNotIn("OWNED_CLAIM_MISSING", checkpoint.detail)
 
     def test_reports_verified_checkpoint_counts_and_missing_source_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

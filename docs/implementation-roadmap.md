@@ -38,7 +38,7 @@
 5. Claim Ledger와 중복·충돌 관계
 6. Coverage Matrix, TaskPacket, 고정 Task DAG
 7. Task 실행·검증·부분 재작성
-8. 결정적 Markdown assembler와 최종 품질 게이트
+8. 결정적 Markdown assembler와 비차단 최종 품질 지표
 9. MLX Worker 프로세스와 취소·재개
 10. PySide6 GUI와 완료 알림
 
@@ -404,8 +404,8 @@ domain types
 - `data/before` 수정이나 기존·finalized after run 덮어쓰기
 - 대화 세션을 Job 상태나 재개 체크포인트로 사용
 - Derived 산출물을 최종 사실의 Evidence로 인용
-- 검증된 Task 섹션을 최종 모델 호출로 전체 재작성
-- 품질 게이트 전에 `data/after` 게시 run 생성
+- 생성된 Task 섹션을 최종 모델 호출로 전체 재작성
+- 조립 체크포인트 전에 `data/after` 게시 run 생성
 
 ## 13. 최종 인수 산출물
 

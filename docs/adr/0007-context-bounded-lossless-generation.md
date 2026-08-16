@@ -4,6 +4,10 @@
 - 상태: Accepted
 - 결정일: 2026-08-14
 
+완료 표식·필수 섹션·coverage를 런타임 실패로 처리하는 부분은 2026-08-17의
+[ADR-0008](0008-non-blocking-quality-observation.md)로 대체됐다. JSON을 읽을 수 없을 때의
+bounded shard와 허용 참조 경계는 계속 유효하다.
+
 ## 1. 배경
 
 모델이 선언한 context window 안에 요청이 들어간다는 사실만으로 긴 문서 품질이 보장되지는

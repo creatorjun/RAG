@@ -55,7 +55,7 @@ class FilesystemFinalDocumentRepositoryTest(unittest.TestCase):
             )
             with self.assertRaises(ApplicationError) as captured:
                 asyncio.run(FilesystemFinalDocumentRepository(artifacts).load(job.job_id))
-            self.assertEqual(captured.exception.code, "FINAL_QUALITY_GATE_FAILED")
+            self.assertEqual(captured.exception.code, "FINAL_ARTIFACT_INVALID")
 
     def test_saves_loads_and_idempotently_verifies_final_checkpoint(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -99,7 +99,7 @@ class FilesystemFinalDocumentRepositoryTest(unittest.TestCase):
             asyncio.run(repository.save(job.job_id, _candidate("# 첫 문서\n")))
             with self.assertRaises(ApplicationError) as captured:
                 asyncio.run(repository.save(job.job_id, _candidate("# 다른 문서\n")))
-            self.assertEqual(captured.exception.code, "FINAL_QUALITY_GATE_FAILED")
+            self.assertEqual(captured.exception.code, "FINAL_ARTIFACT_INVALID")
 
 
 if __name__ == "__main__":

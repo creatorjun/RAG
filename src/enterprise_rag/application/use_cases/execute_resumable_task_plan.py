@@ -49,7 +49,18 @@ class ExecuteResumableTaskPlan:
             existing = await self._existing_attempts(job_id, packet.task_id)
             total_attempts += len(existing)
             latest_output = existing[-1][0] if existing else None
-            latest_validation = existing[-1][1] if existing else None
+            latest_validation = (
+                self._accepted(existing[-1][1]) if existing else None
+            )
+            if existing and not existing[-1][1].valid:
+                LOGGER.info(
+                    "document_task_legacy_quality_gate_ignored",
+                    extra={
+                        "job_id": job_id,
+                        "task_id": packet.task_id,
+                        "legacy_error_codes": list(existing[-1][1].error_codes),
+                    },
+                )
             next_attempt = len(existing) + 1
             while (
                 (latest_validation is None or not latest_validation.valid)
@@ -64,20 +75,16 @@ class ExecuteResumableTaskPlan:
                     latest_validation,
                 )
                 latest_output = result.output
-                latest_validation = result.validation
+                latest_validation = self._accepted(result.validation)
                 total_attempts += 1
                 LOGGER.info(
-                    "document_task_attempt_completed",
+                    "document_task_output_generated",
                     extra={
                         "job_id": job_id,
                         "task_id": packet.task_id,
                         "task_index": task_index,
                         "task_count": len(plan.tasks),
                         "attempt": next_attempt,
-                        "valid": latest_validation.valid,
-                        "validation_error_codes": list(
-                            latest_validation.error_codes
-                        ),
                     },
                 )
                 next_attempt += 1
@@ -92,21 +99,6 @@ class ExecuteResumableTaskPlan:
                     packet.task_id,
                     latest_validation,
                 )
-            if not latest_validation.valid:
-                LOGGER.warning(
-                    "document_task_validation_exhausted",
-                    extra={
-                        "job_id": job_id,
-                        "task_id": packet.task_id,
-                        "task_index": task_index,
-                        "task_count": len(plan.tasks),
-                        "attempt_count": next_attempt - 1,
-                        "validation_error_codes": list(
-                            latest_validation.error_codes
-                        ),
-                    },
-                )
-                break
         complete = len(outputs) == len(plan.tasks) and all(
             report.valid for report in validations
         )
@@ -128,9 +120,7 @@ class ExecuteResumableTaskPlan:
                 break
             output, validation = existing[-1]
             outputs.append(output)
-            validations.append(validation)
-            if not validation.valid:
-                break
+            validations.append(self._accepted(validation))
         complete = len(outputs) == len(plan.tasks) and all(
             report.valid for report in validations
         )
@@ -159,9 +149,13 @@ class ExecuteResumableTaskPlan:
             if gap_seen or validation.task_id != task_id or output.task_id != task_id:
                 raise revision_error("TASK_OUTPUT_INVALID", {"task_id": task_id})
             found.append((output, validation))
-        if any(report.valid for _, report in found[:-1]):
-            raise revision_error("TASK_OUTPUT_INVALID", {"task_id": task_id})
         return tuple(found)
+
+    @staticmethod
+    def _accepted(report: TaskValidationReportDto) -> TaskValidationReportDto:
+        if report.valid:
+            return report
+        return TaskValidationReportDto(report.task_id, True, ())
 
     async def _load_output(
         self,

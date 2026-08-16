@@ -29,7 +29,7 @@ flowchart LR
 - 승인 관리, 근거 기반 합성, 산출물 게시
 - 신규 폴더 run 준비, 경로 가드, 입력 매니페스트, 전후 비교와 finalization
 - Job 상태, Evidence·Derived 분리, Claim Ledger, Coverage Matrix와 Task DAG
-- 태스크별 품질 검증, 결정적 문서 조립, GUI 진행 이벤트와 완료 알림
+- 태스크별 비차단 품질 관찰, 결정적 문서 조립, GUI 진행 이벤트와 완료 알림
 - 체크포인트, 재시도, 감사, 메트릭, 백업·복구
 
 GUI는 별도 애플리케이션 버전이나 V2 파이프라인을 만들지 않는다. 기존 Presentation 계층의
@@ -112,8 +112,8 @@ Coordinator는 MLX 또는 BGE 모델을 import하거나 적재하지 않는다. 
 
 Coordinator는 대화 세션을 작업 상태로 간주하지 않는다. Worker 요청은 불변 TaskPacket이며
 결과, attempt, 검증 보고서는 SQLite와 파일 아티팩트에 저장한다. Worker는 시작 직후 `after_root`를
-생성해 링크·중첩·쓰기 경계를 조기에 검증하지만, 품질 게이트를 통과하기 전에는
-`data/after/runs`에 게시 run을 준비하지 않는다.
+생성해 링크·중첩·쓰기 경계를 조기에 검증한다. 본문 품질 지표와 무관하게 조립 체크포인트가
+준비되면 `data/after/runs`에 게시 run을 준비한다.
 
 현재 단일 호스트 수직 슬라이스는 Job별 subprocess에 `.runner.lock`을 상속하고 launcher가 발급한
 runner token을 자식 PID가 claim한다. Worker는 `runner-state.json`을 5초마다 원자 갱신한다.

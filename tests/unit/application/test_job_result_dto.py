@@ -96,7 +96,6 @@ class JobResultDtoTest(unittest.TestCase):
         valid = _published()
         cases = (
             {"document_path": None},
-            {"quality": _quality(False)},
             {"comparison_report_sha256": "bad"},
             {"publication_fingerprint": "bad"},
             {"comparison_counts": ComparisonCountsDto(0, 0, 0, 0)},
@@ -104,6 +103,11 @@ class JobResultDtoTest(unittest.TestCase):
         for changes in cases:
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 replace(valid, **changes)
+
+    def test_published_result_accepts_non_blocking_legacy_quality_report(self) -> None:
+        result = replace(_published(), quality=_quality(False))
+
+        self.assertFalse(result.quality.valid if result.quality is not None else True)
 
     def test_rejects_inconsistent_notification_receipts_and_claims(self) -> None:
         job_id = "job-" + "c" * 32

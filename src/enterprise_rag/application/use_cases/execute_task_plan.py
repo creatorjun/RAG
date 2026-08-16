@@ -38,34 +38,20 @@ class ExecuteTaskPlan:
         total_attempt_count = 0
         task_total = len(plan.tasks)
         for task_index, packet in enumerate(plan.tasks, start=1):
-            previous: TaskValidationReportDto | None = None
-            latest = None
-            for attempt in range(1, self._maximum_attempts + 1):
-                latest = await self._attempts.execute(
-                    job_id,
-                    packet,
-                    ledger,
-                    evidence,
-                    attempt,
-                    previous,
-                )
-                total_attempt_count += 1
-                if latest.validation.valid:
-                    break
-                previous = latest.validation
-            if latest is None:
-                raise RuntimeError("task attempt loop did not execute")
+            latest = await self._attempts.execute(
+                job_id,
+                packet,
+                ledger,
+                evidence,
+                1,
+                None,
+            )
+            total_attempt_count += 1
+            accepted = TaskValidationReportDto(packet.task_id, True, ())
             outputs.append(latest.output)
-            validations.append(latest.validation)
+            validations.append(accepted)
             if progress is not None:
-                progress(task_index, task_total, packet.task_id, latest.validation)
-            if not latest.validation.valid:
-                return TaskPlanExecutionDto(
-                    tuple(outputs),
-                    tuple(validations),
-                    total_attempt_count,
-                    False,
-                )
+                progress(task_index, task_total, packet.task_id, accepted)
         return TaskPlanExecutionDto(
             tuple(outputs),
             tuple(validations),

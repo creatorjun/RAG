@@ -130,8 +130,6 @@ class TaskSectionOutputDto:
     def __post_init__(self) -> None:
         if not self.section_key.strip() or not self.heading.strip() or not self.markdown.strip():
             raise ValueError("task section content is required")
-        if not self.used_claim_ids or not self.used_evidence_ids:
-            raise ValueError("task section must declare claims and evidence")
         if len(self.used_claim_ids) != len(set(self.used_claim_ids)) or len(
             self.used_evidence_ids
         ) != len(set(self.used_evidence_ids)):
@@ -199,10 +197,8 @@ class TaskPlanExecutionDto:
             raise ValueError("task plan execution output and validation mismatch")
         if self.total_attempt_count < len(self.outputs):
             raise ValueError("task attempt count is inconsistent")
-        if self.complete and (
-            not self.outputs or any(not report.valid for report in self.validations)
-        ):
-            raise ValueError("completed task plan contains invalid output")
+        if self.complete and not self.outputs:
+            raise ValueError("completed task plan contains no output")
 
 
 @dataclass(frozen=True, slots=True)

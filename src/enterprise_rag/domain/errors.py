@@ -133,11 +133,11 @@ _REVISION_ERROR_SPECS: dict[str, tuple[ErrorCategory, str]] = {
     ),
     "DOCUMENT_ASSEMBLY_FAILED": (
         ErrorCategory.CONSISTENCY,
-        "검증된 Task 출력으로 최종 문서를 조립할 수 없습니다.",
+        "생성된 Task 출력으로 최종 문서를 조립할 수 없습니다.",
     ),
-    "FINAL_QUALITY_GATE_FAILED": (
+    "FINAL_ARTIFACT_INVALID": (
         ErrorCategory.CONSISTENCY,
-        "최종 문서 품질 보고서가 없거나 문서와 일치하지 않습니다.",
+        "최종 문서 또는 체크포인트가 없거나 저장된 내용과 일치하지 않습니다.",
     ),
     "JOB_DEFINITION_INVALID": (
         ErrorCategory.CONSISTENCY,

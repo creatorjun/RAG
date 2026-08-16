@@ -4,6 +4,10 @@
 - 상태: Accepted
 - 결정일: 2026-08-12
 
+런타임 품질 게이트와 제한 재작성 결정은 2026-08-17의
+[ADR-0008](0008-non-blocking-quality-observation.md)로 대체됐다. Evidence·Job·결정적 조립
+결정은 계속 유효하다.
+
 ## 1. 배경
 
 기존 전체 문서 통합 수직 슬라이스는 토큰 예산 기반 map/reduce로 하나의 Markdown을 생성한다.
